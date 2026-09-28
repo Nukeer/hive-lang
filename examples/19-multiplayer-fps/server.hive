@@ -68,20 +68,20 @@
 //     serialisation layer in this program — there are four one-line funcs in that
 //     file, and they are all of it.
 //
-//   * **`hive.syslink`** is the mutex, and there is no mutex. Every one of those
-//     reader threads, plus the clock, funnels into **one service**: `referee`, the
-//     fold below. A fold cannot be entered twice at once, so the world is stepped,
-//     shot at, joined and left one message at a time, and nothing in this file
-//     locks anything. Note that this is `syslink` doing the job it does *inside* a
+//   * **`hive.syslink`** does the locking, so nothing else has to. Every one of
+//     those reader threads, plus the clock, funnels into **one service**:
+//     `referee`, below. A service handles one message at a time, so the world is
+//     stepped, shot at, joined and left one message at a time, and nothing in this
+//     file locks anything. Note that this is `syslink` doing the job it does *inside* a
 //     process — nothing here `listen`s, and no service on this node is reachable
 //     from another machine. The network is websockets from end to end.
 //
 // AND ONE SERVICE PER SOCKET
 // --------------------------
-// The fold never writes to a socket. It cannot: a slow client — one on a bad
+// The referee never writes to a socket. It cannot: a slow client — one on a bad
 // connection, one that has stopped reading — would stall the world for everybody
 // while its `wsSend` waited. So every connection gets a second, tiny service of
-// its own (`posting`), whose entire state is that socket, and the fold reaches a
+// its own (`posting`), whose entire state is that socket, and the referee reaches a
 // client by `async`ing a line at it. `async` never blocks and never fails, the
 // write happens on that service's own turn, and the worst a hung client can do is
 // let its own outbox grow.
@@ -117,19 +117,20 @@ type Post {
 // game. A send that fails takes the socket out of its own state, so the writes
 // that were already queued behind it are dropped rather than each waiting to fail
 // in turn.
-proc posting(link: Link, note: Post, from: hive.syslink.Envelope): Link {
+proc posting(link: mut Link, note: Post): Post {
 	if note is Post.Send(line) {
 		if link is Link.Live(conn) {
 			if hive.net.wsSend(conn, line) is Result.Error(problem) {
-				return Link.None()
+				link = Link.None()
 			}
 		}
-		return link
+		return note
 	}
 	if link is Link.Live(conn) {
 		hive.net.wsClose(conn)
 	}
-	return Link.None()
+	link = Link.None()
+	return note
 }
 
 // ---------------------------------------------------------------------------
@@ -178,11 +179,11 @@ type World {
 	beat: Int
 }
 
-// The fold's mailbox. Four things arrive here: somebody sitting down, something a
+// The referee's mailbox. Four things arrive here: somebody sitting down, something a
 // client said, somebody's socket closing, and the clock.
 type Note {
 	Sit { who: Str, post: hive.syslink.Address }
-	// The answer to a `Sit`, and the only reply this service ever makes.
+	// The answer to a `Sit`, and the only answer anybody waits for.
 	Seated { seat: Int }
 	Heard { seat: Int, up: wire.Up }
 	Gone { seat: Int }
@@ -456,48 +457,38 @@ proc relaying(world: World, line: Str, but: Int): void {
 }
 
 // ---------------------------------------------------------------------------
-// The fold
+// The referee
 // ---------------------------------------------------------------------------
 
-// **One service, and therefore one mutex, and therefore no mutex.** Every reader
-// thread and the clock arrive here, and the compiler is what enforces that the
-// world going in and the world coming out are the same type.
-proc referee(world: World, note: Note, from: hive.syslink.Envelope): World {
+proc referee(world: mut World, note: Note): Note {
 	if note is Note.Sit(who, post) {
-		mut World next = world
-		next.nextSeat = world.nextSeat + 1
-		taken := joinedAt(world, next.nextSeat, who, post)
-		append(next.seats, taken)
-		// The reader thread is waiting for this: it needs its own number before it
-		// can tag anything else it hears. It is the one request this service
-		// answers, and the answer is one of its own messages, so nothing is
-		// annotated.
-		hive.syslink.answer(from, Note.Seated(next.nextSeat))
-		// And the client is told the three things it cannot work out: which seat it
+		world.nextSeat = world.nextSeat + 1
+		append(world.seats, joinedAt(world, world.nextSeat, who, post))
+		// The client is told the three things it cannot work out: which seat it
 		// is, which world it is in, and where in that world it is standing. The map
 		// itself never crosses — it is `place.arena` of that number.
-		async post(Post.Send(wire.told(wire.Down.Welcome(next.nextSeat, world.seed,
-			place.spot(next.nextSeat, world.seed)))))
-		telling(next, wire.told(wire.Down.Said(0, "", "{who} joined")))
-		return next
+		async post(Post.Send(wire.told(wire.Down.Welcome(world.nextSeat, world.seed,
+			place.spot(world.nextSeat, world.seed)))))
+		telling(world, wire.told(wire.Down.Said(0, "", "{who} joined")))
+		// The reader thread is waiting for this: it needs its own number before it
+		// can tag anything else it hears.
+		return Note.Seated(world.nextSeat)
 	}
 
 	if note is Note.Heard(seat, up) {
-		return heard(world, seat, up)
+		world = heard(world, seat, up)
 	}
 
 	// A socket that closed. Every message still in flight from that client lands
 	// on nobody, which is what `seatOf` answering with `vacant` is for.
 	if note is Note.Gone(seat) {
-		return departed(world, seat)
+		world = departed(world, seat)
 	}
 
 	if note is Note.Tick(ms) {
-		return ticked(world, ms)
+		world = ticked(world, ms)
 	}
-	// `Seated` only ever goes back as the answer to a `Sit`, never into the
-	// mailbox — but it is one of the mailbox's messages, so it has a branch.
-	return world
+	return note
 }
 
 // What a client said. Six messages, and the shape of every branch is the same: the
@@ -559,7 +550,7 @@ proc ticked(world: World, ms: Int): World {
 
 	// The horde, one step — and the bites it managed handed back rather than sent,
 	// because working out what happened is a `func` and changing somebody's health
-	// is this fold's business.
+	// is the referee's business.
 	assault := horde.stirred(made, blocks, world.pack, hunted(world), ms)
 	next.pack = assault.horde
 	for each bite in assault.bitten {

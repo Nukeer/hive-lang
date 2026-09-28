@@ -50,8 +50,13 @@ func index(): Str {
 
 		Each module owns its types under its own namespace: ~BT~hive.net.HttpRequest~BT~,
 		~BT~hive.json.JsonError~BT~, ~BT~hive.map.Map~BT~, ~BT~hive.syslink.Address~BT~. The only
-		builtin types that live directly on ~BT~hive~BT~ are the three the language uses
+		builtin types that live directly on ~BT~hive~BT~ are the two the language uses
 		without a module: ~BT~Result~BT~ and ~BT~Table~BT~.
+
+		**A library call is held to its signature** — how many arguments, and what each
+		is — and a type or an enumeration variant the module does not have
+		(~BT~hive.net.Nonesuch~BT~, ~BT~hive.ui.TextSize.Small()~BT~) is a compile error rather
+		than something the Go toolchain reports later.
 
 		**A module you don't use is not in your build.** Every module but two is
 		written against the target's standard library alone, so HTTP, WebSockets, TCP,
@@ -223,11 +228,13 @@ func maps(): Str {
 		* **A map is a value**, and so is what comes out of it: ~BT~keys~BT~ and ~BT~values~BT~ are
 		  fresh vectors.
 		* **~BT~==~BT~ compares the pairs** and ignores the order they were set in. There is
-		  no ordering *between* maps, so ~BT~sort~BT~ on a vector of them is a compile error.
+		  no ordering *between* maps, so ~BT~sort~BT~ on a vector of them — or of a type
+		  holding one — is a compile error.
 		* **A map does not travel and does not encode.** ~BT~encode~BT~ refuses one
 		  and so does a [~BT~hive.syslink~BT~](syslink.md) mailbox: decoding there is by
-		  declared shape, while a map's keys are whatever was put in it. Send
-		  ~BT~toTable(m)~BT~ and rebuild it with ~BT~fromTable~BT~ on the other side.
+		  declared shape, while a map's keys are whatever was put in it. Send its pairs
+		  as a vector of a type declared for them. The one exception is a
+		  [~BT~JsonValue~BT~](json.md) object's properties, whose codec is the document itself.
 
 		~BT~import hive.map~BT~ names the module ~BT~map~BT~, which **coexists with the
 		~BT~map(v, f)~BT~ builtin**: a call on the name is the module and a bare call is the
@@ -649,9 +656,7 @@ func json(): Str {
 		| ~BT~T.decode(text, codec)~BT~ | ~BT~Result<T, E>~BT~ — ~BT~E~BT~ is the codec's error, ~BT~JsonError~BT~ here |
 		| ~BT~T.Variant.decode(text, codec)~BT~ | the same — one variant's payload |
 		| ~BT~encode(value, codec)~BT~ | ~BT~Str~BT~ — **cannot fail** |
-		| ~BT~flatten(text)~BT~ | ~BT~Result<Table, _>~BT~ — the document flattened |
-		| ~BT~table(text)~BT~ | ~BT~Result<Table, _>~BT~ |
-		| ~BT~get(table, path)~BT~ | ~BT~Result<Str, _>~BT~ |
+		| ~BT~JsonValue.decode(text, codec)~BT~ | ~BT~Result<JsonValue, _>~BT~ — any document |
 
 		A ~BT~JsonError~BT~ carries the exact ~BT~path~BT~ that failed, what was ~BT~expected~BT~
 		and what was ~BT~found~BT~. ~BT~encode~BT~ and ~BT~decode~BT~ name no format: **the codec is
@@ -699,8 +704,6 @@ func json(): Str {
 		~BT~JSON as~BT~ renames in **both** directions, so a round trip agrees with itself.
 		~BT~Default as~BT~ is what turns a required field into an optional one: an absent
 		key and a ~BT~null~BT~ one are the same nothing, and both read as the literal.
-		Neither reaches ~BT~flatten(text)~BT~, which flattens a document rather
-		than decoding a declared shape.
 
 		## Decoding
 
@@ -713,23 +716,52 @@ func json(): Str {
 		* ~BT~encode~BT~ derives the encoder from the **static** type and therefore cannot
 		  fail — it answers with a ~BT~Str~BT~, not a ~BT~Result~BT~.
 		* **A map does not encode.** Its keys are whatever was put in it, while decoding
-		  here is by declared shape. Send [~BT~hive.map.toTable(m)~BT~](map.md) instead.
+		  here is by declared shape. Send its pairs as a vector of a type declared for them
+		  — or hold the document as a ~BT~JsonValue~BT~, below, whose objects are maps.
+		* **Nor does a ~BT~Table~BT~**, anywhere in a value: it is rows of cells with nothing
+		  to name them. ~BT~Table.decode~BT~ does not exist.
 
 		## When the shape is not yours to declare
 
-		~BT~table(text)~BT~ reads a **JSON array of flat objects** as a headered ~BT~Table~BT~ —
-		the first row is the column names.
-
-		~BT~flatten(text)~BT~ flattens a **whole document** into ~BT~[path, value]~BT~
-		rows, looked up with ~BT~get~BT~ and re-nested by the encoder:
+		~BT~hive.json.JsonValue~BT~ is any document, as the JSON it is:
 
 		~CODE~hive
-		if hive.json.flatten(config) is Result.Ok(flat) \{
-			if hive.json.get(flat, "keys.layout") is Result.Ok(layout) \{
-				echo layout
+		type JsonValue \{
+			String \{ value: Str }
+			Boolean \{ value: Bool }
+			Int \{ value: Int }
+			Float \{ value: Float }
+			Array \{ values: JsonValue[dyn] }
+			Object \{ properties: hive.map.Map<Str, JsonValue> }
+		}
+		~CODE~
+
+		It reads and writes the document itself — ~BT~"x"~BT~, never
+		~BT~\{"String": \{"value": "x"}}~BT~ — and is taken apart like any union:
+
+		~CODE~hive
+		if hive.json.JsonValue.decode(config, hive.json.codec()) is Result.Ok(doc) \{
+			if doc is hive.json.JsonValue.Object(properties) \{
+				for each key in hive.map.keys(properties) \{
+					echo key
+				}
+				if hive.map.get(properties, "name") is Result.Ok(name) \{
+					echo name
+				}
 			}
 		}
 		~CODE~
+
+		* A number is an ~BT~Int~BT~ where it reads as one and a ~BT~Float~BT~ otherwise, so
+		  ~BT~1.0~BT~ stays a ~BT~Float~BT~ both ways.
+		* An object's properties are a [map](map.md), in the order the document wrote
+		  them. A key written twice keeps its first place and its last value.
+		* Holding a map, a ~BT~JsonValue~BT~ has no order: ~BT~sort~BT~ over them takes the
+		  ~BT~func~BT~ that says which comes first.
+		* **No variant is ~BT~null~BT~**, so a document holding one is an error at that path.
+		* It is read whole: the document says which variant it is, so
+		  ~BT~JsonValue.String.decode~BT~ is refused.
+		* A field may be one, which leaves that part of a declared type undeclared.
 
 		The same derived codecs are what a [~BT~hive.syslink~BT~](syslink.md) message
 		crosses the wire as.
@@ -1330,16 +1362,17 @@ func syslink(): Str {
 		Every call is [syslink-calls](syslink-calls.md); across machines is
 		[syslink-nodes](syslink-nodes.md).
 
-		## The handler is a fold over the mailbox
+		## The handler is one turn
 
 		~CODE~hive
-		proc handler(state: State, message: Message, from: hive.syslink.Envelope): State
+		proc handler(state: mut State, message: Message): Message
 		~CODE~
 
-		The compiler enforces that **the state going in and coming out are the same
-		type**. There is no mutex and no ~BT~mut~BT~ anywhere: **the fold *is* the mutex.** One
-		message is folded at a time, so a handler's body is the only thing that ever
-		touches that state and needs no lock to do it.
+		A handler **writes its state in place and returns the answer**. The state is a
+		mutex parameter only the service's own mailbox ever holds, and one message is
+		handled at a time, so a handler's body is the only thing that ever touches that
+		state and needs no lock to do it. A handler is an ordinary ~BT~proc~BT~, so a test can
+		call it directly with a ~BT~mut~BT~ variable of its own.
 
 		~CODE~hive
 		type Op \{
@@ -1348,27 +1381,26 @@ func syslink(): Str {
 			Total \{ n: Int }
 		}
 
-		proc counter(seen: Str[dyn], message: Op, from: hive.syslink.Envelope): Str[dyn] \{
+		proc counter(seen: mut Str[dyn], message: Op): Op \{
 			if message is Op.Add(word) \{
-				mut Str[dyn] next = seen
-				append(next, word)
-				return next
+				append(seen, word)
 			}
-			if message is Op.Count \{
-				hive.syslink.answer(from, Op.Total(len(seen)))
-			}
-			return seen
+			return Op.Total(len(seen))
 		}
 
 		proc main(): void \{
 			Str[dyn] empty = []
 			cache := hive.syslink.spawn(counter, empty)
 			async cache(Op.Add("hello"))
-			if cache(Op.Count()) is Result.Ok(Op.Total(n)) \{
+			if cache(Op.Count()) is Result.Ok(reply) && reply is Op.Total(n) \{
 				echo n
 			}
 		}
 		~CODE~
+
+		The compiler holds a handler to that shape where the service is started: its
+		first parameter takes the mutex, the state it starts with fits that parameter,
+		and it returns its own mailbox type.
 
 		## The mailbox type is the whole protocol
 
@@ -1376,19 +1408,33 @@ func syslink(): Str {
 		answers with one of its own messages. That is what makes one type declaration
 		the whole contract between a caller and a service, on this machine or another.
 
+		**Every request is answered** with what its turn returned, and a caller on this
+		node is handed its own copy, since the next turn may write the state the answer
+		was read from. A fire-and-forget send discards it.
+
 		## A crash is local to its service
 
 		A ~BT~panic~BT~ inside a service body **kills only that service**: its monitors are
-		told, its callers stop waiting, and the node keeps running. **This is the one
+		told, its callers get ~BT~"Down"~BT~, and the node keeps running. **This is the one
 		place ~BT~panic~BT~ does not stop the program.**
 
-		## Forgetting to answer fails fast
+		## A service that knows its own address
 
-		A request a service handles **without answering** comes straight back as
-		~BT~"NoReply"~BT~ — unless the envelope escaped the turn, in which case a reply may
-		genuinely still be on its way and the runtime keeps waiting. That is what makes
-		a deferred reply possible: hand the envelope to something else and answer from
-		there.
+		~BT~spawnAddressed(handler, state)~BT~ starts a handler that is also handed its own
+		address every turn, to register itself or to give to work it starts so that the
+		result comes back as a message:
+
+		~CODE~hive
+		proc fetcher(pending: mut Int, note: Note, me: hive.syslink.Address): Note \{
+			if note is Note.Fetch(url) \{
+				pending += 1
+				async download(me, url)
+			} else if note is Note.Fetched(_) \{
+				pending -= 1
+			}
+			return note
+		}
+		~CODE~
 
 		## When to reach for one
 
@@ -1406,20 +1452,18 @@ func syslinkCalls(): Str {
 		| call | answers with |
 		| --- | --- |
 		| ~BT~spawn(handler, state)~BT~ | ~BT~Address~BT~ — starts a service |
+		| ~BT~spawnAddressed(handler, state)~BT~ | ~BT~Address~BT~ — one whose handler is handed its own address |
 		| ~BT~register(name, address)~BT~ | ~BT~Result<Address, SyslinkError>~BT~ |
 		| ~BT~at(name)~BT~ | ~BT~Address~BT~ — that service on **this** node |
 		| ~BT~on(endpoint, name)~BT~ | ~BT~Address~BT~ — the same service on **another** |
-		| ~BT~self(from)~BT~ | ~BT~Address~BT~ — the running service's own |
-		| ~BT~answer(from, value)~BT~ | ~BT~void~BT~ |
-		| ~BT~monitor(from, target, message)~BT~ | ~BT~void~BT~ |
+		| ~BT~monitor(watcher, target, notice)~BT~ | ~BT~void~BT~ |
 		| ~BT~stop(address)~BT~ | ~BT~void~BT~ |
 		| ~BT~listen(endpoint)~BT~ | ~BT~Result<Str, SyslinkError>~BT~ |
 		| ~BT~node()~BT~ | ~BT~Str~BT~ |
 		| ~BT~peers()~BT~ | ~BT~Str[dyn]~BT~ |
 
-		~BT~Address~BT~ and ~BT~Envelope~BT~ are **opaque**: an address is produced by ~BT~spawn~BT~,
-		~BT~at~BT~, ~BT~on~BT~ or ~BT~self~BT~, and an envelope only ever arrives as a handler's third
-		parameter. A ~BT~SyslinkError~BT~ carries a ~BT~reason~BT~ and a ~BT~message~BT~.
+		~BT~Address~BT~ is **opaque**: an address is produced by ~BT~spawn~BT~, ~BT~spawnAddressed~BT~,
+		~BT~at~BT~ or ~BT~on~BT~. A ~BT~SyslinkError~BT~ carries a ~BT~reason~BT~ and a ~BT~message~BT~.
 
 		## An address is called
 
@@ -1464,15 +1508,12 @@ func syslinkCalls(): Str {
 		which is the reason to register one at all: an address from ~BT~spawn~BT~ names that
 		instance and nothing else.
 
-		## Inside a handler
+		## Watching and stopping
 
-		~BT~answer(from, value)~BT~ replies to the request the envelope came from.
-		~BT~self(from)~BT~ is the running service's own address, which is what it hands to
-		something that will call it back.
-
-		~BT~monitor(from, target, message)~BT~ asks to be told when ~BT~target~BT~ dies: that
-		~BT~message~BT~ arrives in this service's own mailbox. That is how a supervisor is
-		written, and it is why a crash being local is useful rather than merely quiet.
+		~BT~monitor(watcher, target, notice)~BT~ posts ~BT~notice~BT~ to ~BT~watcher~BT~ — a service on
+		this node, such as ~BT~hive.syslink.at(#Supervisor)~BT~ or the address
+		~BT~spawnAddressed~BT~ hands a handler — when ~BT~target~BT~ dies. That is how a supervisor
+		is written, and it is why a crash being local is useful rather than merely quiet.
 
 		~BT~stop(address)~BT~ ends a service.
 	`)
@@ -1499,6 +1540,10 @@ func syslinkNodes(): Str {
 		}
 		echo "this node is \{hive.syslink.node()}"
 		~CODE~
+
+		**~BT~listen~BT~ answers with the endpoint a peer should dial.** A port of ~BT~0~BT~ asks the
+		kernel to choose, and what comes back — and what ~BT~node()~BT~ says from then on —
+		carries the port it chose. The host is left as written.
 
 		**A node has no name.** It is identified by the endpoint it can be dialled at,
 		so a peer list is ordinary runtime data rather than a cluster configuration.

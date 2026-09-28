@@ -12,11 +12,10 @@
 // `client.told` folding everything that comes back. Every line below an assertion
 // is code that ships.
 //
-// **What it cannot reach** is `client.update` and `server.referee` themselves: they
-// are handlers, an envelope is opaque, and one only ever arrives as a handler's own
-// argument. So the window is stood in for by a fold of the same shape — folding
-// `client.told`, which is the real one — and the server's fold is spawned exactly
-// as `server.main` spawns it and then reached only down a socket, which is how a
+// A service's state is private, so the window is stood in for by a handler of the
+// same mailbox type — using `client.told`, which is the real one — that answers with
+// a report of what it holds. The server's referee is spawned exactly as
+// `server.main` spawns it and then reached only down a socket, which is how a
 // client reaches it too.
 //
 //   hive test arena.test.hive
@@ -30,28 +29,27 @@ import ./lib/wire
 // socket. The socket is out here rather than inside the service on purpose — a
 // service's state is private, and a connection is not a thing that can come back
 // out of one in a message. Which is the same reason the server keeps its sockets in
-// a service *per socket* rather than in the fold.
+// a service *per socket* rather than in the referee.
 type Player {
 	box: hive.syslink.Address
 	conn: hive.net.WsConnection
 }
 
-// A stand-in for the window. It is the same mailbox type the real one folds, and
-// the two branches that matter fold it with the real functions; anything else is
-// answered with a report of what it is holding, because a service's state is
-// private and asking is the only way to read one.
-proc window(model: client.Model, msg: client.Msg, from: hive.syslink.Envelope): client.Model {
+// A stand-in for the window. It is the same mailbox type the real one handles, and
+// the two branches that matter use the real functions; anything else is answered
+// with a report of what it is holding, because a service's state is private and
+// asking is the only way to read one.
+proc window(model: mut client.Model, msg: client.Msg): client.Msg {
 	if msg is client.Msg.Heard(news) {
-		return client.told(model, news)
+		model = client.told(model, news)
+		return msg
 	}
 	if msg is client.Msg.Lost(why) {
-		mut client.Model out = client.unjoined(model)
-		out.trouble = why
-		return out
+		model = client.unjoined(model)
+		model.trouble = why
+		return msg
 	}
-	hive.syslink.answer(from, client.Msg.Heard(wire.Down.Said(model.seat, model.me,
-		report(model))))
-	return model
+	return client.Msg.Heard(wire.Down.Said(model.seat, model.me, report(model)))
 }
 
 // What this client believes, as one line. Every number in it came off the wire.
@@ -133,7 +131,7 @@ proc waiting(one: Player, what: Str, patience: Int): Bool {
 	return holds(asking(one), what)
 }
 
-// A model whose link is that socket. It is what the real fold is holding; a test
+// A model whose link is that socket. It is what the real window is holding; a test
 // cannot read one out of a service, so this builds the same thing beside it, and
 // every `tell` below goes down the link in it.
 func speaking(one: Player, who: Str): client.Model {
@@ -164,9 +162,7 @@ func afoot(one: Player, seat: Int, who: Str): client.Model {
 	return model
 }
 
-// Joining, which is `client.joining` with its two lines that need an envelope
-// written out here instead: the connect, and the `self` that hands the window's
-// address to the reader.
+// `client.joining`, with this file's stand-in as the window.
 proc joining(who: Str): Player {
 	opened := hive.net.wsConnect("ws://127.0.0.1:9289/arena")
 	if opened is Result.Ok(conn) {
@@ -205,7 +201,7 @@ proc leaving(one: Player, who: Str): void {
 }
 
 test "a whole game crosses a real websocket" {
-	// The server, exactly as `server.main` starts it: one fold holding the world,
+	// The server, exactly as `server.main` starts it: one service holding the world,
 	// one clock, and `wsServe` handing every connection to `seated` on a thread of
 	// its own.
 	desk := hive.syslink.spawn(server.referee, server.mustered())

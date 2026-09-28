@@ -27,6 +27,8 @@ file, plus a generated `hive` runtime package.
 | `p(v: mut T)` (a mutex parameter) | `p(v *T)`, read and written through `(*v)` |
 | `p(mutVec)` (waited for) | `p(&mutVec)` — the callee writes the caller's own storage |
 | `async p(mutVec)` (fired off) | `{ _a0 := hive.CloneVec(mutVec); go p(&_a0) }` |
+| `proc(mut T, U): R` (a function type) | `func(*T, U) R` — a call through one hands over the address exactly as `p(mutVec)` does |
+| `hive.syslink.spawn(h, s)` | `hive.SyslinkSpawn(h, ..)`: each turn calls `h(&state, msg)` and replies with what it returns — a deep copy for a caller on this node |
 | `f(x)` / `async f(x)` | a plain call / `go f(x)` |
 | `x := async f(a)` | `_task_x := hive.Spawn(..)`, and every read of `x` becomes `_task_x.Await()` |
 | `f(x) with timeout ms` | `hive.AwaitTimeout(hive.Spawn(..), ms)` → a `Result` |
@@ -47,9 +49,9 @@ file, plus a generated `hive` runtime package.
 | `f` (bare reference) / `f(a, _, c)` | the function value / a closure whose parameter is the hole |
 | `func f(v: T[]): T` at `T = Str` | `func f_Str(v []string) string` — one copy per instantiation |
 | `hive.file.csv(p, s)` / `hive.sql.run(conn, q(..))` / `hive.sql.raw(conn, t)` | `hive.ReadCsv(..)` / `hive.SqlRows(..)` / `hive.SqlQuery(..)`, each → a `Result` |
-| a `hive.*` library call | a call of the same name on the generated `hive` runtime package (`hive.json.flatten` → `hive.JsonFlatten`) |
+| a `hive.*` library call | a call of the same name on the generated `hive` runtime package (`hive.time.now` → `hive.TimeNow`) |
 | `T.decode(t, c)` / `T.Variant.decode(t, c)` | `hive.JsonParse(t, jsonDecode_T)` / `hive.JsonParse(t, jsonDecode_T_Variant)` — `c` names the format and is not itself evaluated |
-| `encode(v, c)` | `jsonEncode_T(v)` for a declared `T`, else the encoder for the scalar, vector or `Table` it is — written at the call site from the format `c` names, never a runtime call |
+| `encode(v, c)` | `jsonEncode_T(v)` for a declared `T`, else the encoder for the scalar or vector it is — written at the call site from the format `c` names, never a runtime call |
 | `import hive.ui as ui`, then `ui.row(..)` | nothing — the alias is resolved during flattening, so the emitter only ever sees `hive.ui.row` |
 | `hive.map.Map<Str, Int>` | `hive.Dict[string, int]` — a key order beside a Go map |
 | `import ./util.go`, then `util.slugify(s)` | the file compiled as its own package, plus a wrapper `func util_0_slugify(s string) string { return ffi_util_1.Slugify(s) }`, with a copy around every value that owns storage |
@@ -198,6 +200,23 @@ that because only a `lib*.so` is extracted into the one directory an app may
 execute from — beside a fixed WebView host, a binary `AndroidManifest.xml`, and
 `assets/icon.png` as the launcher icon where the program ships one. The
 application id is derived from the entrypoint, so `chat.hive` is `hive.chat`.
+
+**What the program is started in.** Its working directory and `$HOME` are the
+app's own files directory and `$TMPDIR` its cache, so `.env` and the syslink
+cluster key live there. The manifest asks for `INTERNET` and
+`ACCESS_NETWORK_STATE`: the second is what lets the host write the network's DNS
+servers to `$HOME/.hive/resolvers` at start and whenever the network changes,
+since a handset has no `/etc/resolv.conf` for a lookup to read. What the program
+prints goes to logcat. The collector is set to `GOGC=off` with
+`GOMEMLIMIT=256MiB`: a window builds its whole world every frame over a live heap
+of a megabyte or two, which Go's default would collect nearly every frame. An
+intent extra named `HIVE_FOLDS`, `GOGC` or `GOMEMLIMIT` is passed into the
+program's environment — those three and nothing else, since any app can send an
+intent — and `HIVE_INSPECT` lets `chrome://inspect` attach to the WebView:
+
+```
+adb shell am start -n hive.chat/dev.hive.app.MainActivity --es HIVE_FOLDS 1
+```
 
 **Nothing but Go is needed.** The manifest, the resource table, the archive and
 its signature are written by the build itself, the way the Windows resource

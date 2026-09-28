@@ -69,8 +69,8 @@ token, and the secret travels in the codec value.
 Its other half is `T.decode(text, codec)`, named on the type because a `Str`
 arriving from outside cannot say what it should become
 ([14.7](14-stdlib.md#147-hivejson)). What a format cannot carry — a
-`hive.map.Map`, whose keys are whatever was put in it — is refused where the
-encoder is derived.
+`hive.map.Map`, whose keys are whatever was put in it, or a `Table`, which has
+no names for its cells — is refused where the encoder is derived.
 
 ## A declaration of your own wins
 
@@ -167,7 +167,7 @@ the same storage.
 | `Result<T, E>` | every `Error` before every `Ok`; two of a kind by their payloads |
 | a struct | field by field, in declaration order |
 | a tagged union | by **variant** first, in declaration order, then by that variant's fields |
-| a function value, a service address | none — a compile error, naming the part at fault |
+| a map, a function value, a service address, or a type holding one | none — a compile error |
 
 The ordering is chosen by the element's static type and emitted inline, the same
 way a deep copy is: no runtime reflection, no boxing, no dispatch.

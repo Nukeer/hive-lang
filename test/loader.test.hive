@@ -123,6 +123,23 @@ test "a module the compiler does carry is a spelling and nothing more" {
 	assert tree("main.hive", "import hive.net as web\nproc main(): void \{ }") == "(proc main () void (block))"
 }
 
+test "a library type is flattened in only where the program names one" {
+	assert text.contains(tree("main.hive", "proc main(): void \{ echo hive.json.codec() }"), "hive_json_") == false
+	got := tree("main.hive", "func f(v: hive.json.JsonValue): Bool \{ return v is hive.json.JsonValue.Int(_) }")
+	assert text.contains(got, "(type hive_json_JsonValue")
+	assert text.contains(got, "(func f ((v hive_json_JsonValue)) Bool")
+	assert text.contains(got, "hive_json_JsonValue.Int")
+}
+
+test "every spelling of a library type is the one type" {
+	long := tree("main.hive", "proc main(): void \{ echo hive.json.JsonValue.Int(1) }")
+	short := tree("main.hive", "import hive.json\nproc main(): void \{ echo json.JsonValue.Int(1) }")
+	aliased := tree("main.hive", "import hive.json as j\nproc main(): void \{ echo j.JsonValue.Int(1) }")
+	assert long == short
+	assert long == aliased
+	assert text.contains(long, "hive_json_JsonValue")
+}
+
 // --- Several files -----------------------------------------------------------
 
 test "an imported declaration is renamed, and every reference with it" {

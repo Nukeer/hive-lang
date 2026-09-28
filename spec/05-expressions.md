@@ -96,12 +96,20 @@ A constructor has **no bare reference**: a variant is a value once it is built,
 so `Msg.Changed` on its own is a compile error and the hole is what makes one a
 function value ([03](03-types.md#34-declared-types)).
 
-Three things cannot become values:
+**A callable with a mutex parameter is a value like any other.** `f := grow` is a
+`proc(mut Str[dyn], Str): void`, and `grow(_, "x")` a `proc(mut Str[dyn]): void`.
+A mutex position in a partial application has to stay a hole: what is supplied is
+captured by value, so writes through it would land in a copy nobody sees.
+
+**A call through a function value is held to the value's type**: how many
+arguments, what each one is, and a `mut` variable or a path into one wherever the
+type says `mut` ([8.2](08-mutability-and-values.md#82-mutex-parameters)). A
+function value's parameters have no names, so its arguments go by position.
+
+Two things cannot become values:
 
 * a **generic** callable — which copy a call reaches is decided by the argument
   types, and a value carries none;
-* a callable with a **mutex parameter** — a function value has no call site to
-  take a mutex from;
 * a callable with a **statically-sized parameter**, beyond one immutable local
   binding it is called through. See
   [10](10-bounds.md#a-promise-restricts-a-callable-as-a-value).

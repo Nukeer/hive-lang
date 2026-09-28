@@ -588,6 +588,12 @@ proc checkExpr(bo: mut Proofs, env: infer.Env, e: ast.Expr): void {
 			checkExpr(bo, env, a.value)
 		}
 		checkDrop(bo, env, callee, args)
+		for each written in infer.mutexArguments(env, callee, args) {
+			name := rootOf(written)
+			if name != "" {
+				lose(bo, name)
+			}
+		}
 	} else if e is ast.Expr.Binary(_, left, right) {
 		checkExpr(bo, env, left)
 		checkExpr(bo, env, right)

@@ -143,8 +143,8 @@ the call inline works the same way.
 * **rebinding** the vector (`v = [...]`), including in a branch that may not run;
 * **`drop`**, the one builtin that makes a vector shorter — a `v[1]` proven safe
   before a `drop(v, 0, 0)` needs proving again after;
-* passing the vector to a **`mut` parameter**, since the callee may rebind it to
-  a shorter one;
+* passing the vector to a **`mut` parameter**, by name or through a function
+  value, since the callee may rebind it to a shorter one;
 * replacing a **field** that held it.
 
 ## 10.7 `drop`'s own bounds

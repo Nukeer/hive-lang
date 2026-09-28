@@ -371,6 +371,13 @@ test "two bindings of the same mutability are an alias, not a copy" {
 		"main", "deep copy") == false
 }
 
+test "an argument that comes straight back into its own variable is not copied" {
+	source := "func added(v: Str[dyn], s: Str): Str[dyn] \{ return v + [s] }\n" + "proc grow(v: mut Str[dyn]): void \{ v = added(v, \"a\") }\n" + inMain("mut Str[dyn] v = []  grow(v)")
+	assert finds(source, "grow", "deep copy") == false
+	elsewhere := "func added(v: Str[dyn], s: Str): Str[dyn] \{ return v + [s] }\n" + inMain("mut Str[dyn] v = []  w := added(v, \"a\")  append(v, \"b\")  echo w")
+	assert finds(elsewhere, "main", "deep copy")
+}
+
 test "a fresh right-hand side is already independent and is never copied" {
 	assert finds(boxed("kept := Box([\"a\"]) echo len(kept.items)"), "main", "deep copy") == false
 }

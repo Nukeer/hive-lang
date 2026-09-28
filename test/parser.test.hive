@@ -236,6 +236,13 @@ test "a function type is a declaration with the name dropped" {
 	assert got == "(func f ((g (func(Int) Int)) (h (proc(Str) void))) void (block))"
 }
 
+test "a proc type may ask for the mutex itself, and a func type may not" {
+	got := tree("proc f(g: proc(mut Str[dyn], Str): void): void \{ }")
+	assert got == "(proc f ((g (proc(mut Str[dyn],Str) void))) void (block))"
+	assert text.startsWith(problem("proc f(g: func(mut Int): void): void \{ }"),
+		"a `func` type cannot take the mutex itself")
+}
+
 // --- Bindings and assignment -------------------------------------------------
 
 test "the four ways to bind a name" {

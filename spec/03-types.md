@@ -203,6 +203,7 @@ name dropped:
 ```hive
 func(Int): Int
 proc(hive.net.HttpRequest): hive.net.HttpResponse
+proc(mut Str[dyn], Str): void
 ```
 
 It is usable as a parameter, a return and a variable type.
@@ -211,9 +212,11 @@ The `proc`/`func` split is preserved through values: a `func` value **may** be
 used where a `proc` is expected, and a `proc` value may **not** fill a `func`
 slot.
 
-`mut` may not appear in a function type. A function value has no call site to
-take a mutex from, so a callable with a mutex parameter can be neither
-referenced nor partially applied.
+**A `proc` type may mark a parameter `mut`**, which is a mutex parameter of the
+value ([8.2](08-mutability-and-values.md#82-mutex-parameters)); a `func` type may
+not, and `func(mut Int)` is a compile error. A mutex position is part of the type:
+`proc(mut Int): void` and `proc(Int): void` are different types, and neither fills
+the other's slot.
 
 ## 3.6 Maps
 
@@ -239,7 +242,8 @@ Three type-level rules:
 
 Conceptually a `mut T` is a `Mutex<T>`: identical to `T` at run time, but only
 mutexes may be altered at compile time. It has no spelling of its own outside a
-declaration and a `proc` parameter. See [08](08-mutability-and-values.md).
+declaration, a `proc` parameter and a `proc` type's parameter. See
+[08](08-mutability-and-values.md).
 
 ## 3.8 Type variables
 

@@ -177,7 +177,9 @@ It is the same feature and the same rules — the alias is a name like any other
 Three things are particular to it:
 
 * The path is the module and nothing else: `import hive.ui`, never
-  `import hive.ui.View`.
+  `import hive.ui.View`. A path naming something inside a module is refused as
+  that, and a module this compiler does not carry — `import hive.jsno` — is
+  refused at the import rather than at every use of its alias.
 * Without `as`, the name is the module's own last segment.
 * **Nothing is imported into the program.** The alias is a *spelling*: `ui.row`
   and `hive.ui.row` are the same call, both are always available, and neither

@@ -574,49 +574,9 @@ proc markCall(w: mut Written, env: infer.Env, callee: ast.Expr, args: ast.Arg[])
 			}
 		}
 	}
-	// A mutex parameter takes the caller's own storage rather than a copy, so
-	// whatever was handed to one is storage the program writes. With named
-	// arguments the order says nothing about which landed on the mutex, so all are
-	// marked — right, and costing a copy nobody was going to save.
-	if callee is ast.Expr.Ident(plain) {
-		if types.findCallable(env.table, plain) is Result.Ok(found) {
-			if anyNamed(args) {
-				if takesMutex(found.params) {
-					for each a in args {
-						markThrough(w, env, a.value)
-					}
-				}
-				return
-			}
-			mut i := 0
-			for each p in found.params {
-				if p.mutex {
-					if args bounds i {
-						markThrough(w, env, args[i].value)
-					}
-				}
-				i = i + 1
-			}
-		}
+	for each found in infer.mutexArguments(env, callee, args) {
+		markThrough(w, env, found)
 	}
-}
-
-func anyNamed(args: ast.Arg[]): Bool {
-	for each a in args {
-		if a.name != "" {
-			return true
-		}
-	}
-	return false
-}
-
-func takesMutex(params: ast.Param[]): Bool {
-	for each p in params {
-		if p.mutex {
-			return true
-		}
-	}
-	return false
 }
 
 func calleeName(callee: ast.Expr): Str {

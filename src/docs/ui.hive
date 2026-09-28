@@ -36,11 +36,13 @@ func ui(): Str {
 		| call | what it does |
 		| --- | --- |
 		| ~BT~window(title, view, update, state)~BT~ | opens a window and **does not return** |
+		| ~BT~windowAddressed(title, view, update, state)~BT~ | the same, with ~BT~update~BT~ handed the window's address |
 		| ~BT~html(view)~BT~ | renders the tree as an HTML **fragment** → ~BT~Str~BT~ |
 		| ~BT~page(title, view)~BT~ | renders it as a whole **document** → ~BT~Str~BT~ |
 
 		~BT~view~BT~ is a ~BT~func(State): hive.ui.View~BT~ and ~BT~update~BT~ is a
-		~BT~proc(State, Msg, hive.syslink.Envelope): State~BT~.
+		~BT~proc(mut State, Msg): Msg~BT~ — for ~BT~windowAddressed~BT~,
+		~BT~proc(mut State, Msg, hive.syslink.Address): Msg~BT~.
 
 		| page | what is on it |
 		| --- | --- |
@@ -84,12 +86,33 @@ func ui(): Str {
 		**Nothing in the source names it.** What a window shows and what the file
 		carries have to be one image, so there is one place to put it.
 
+		## Its typeface is ~BT~assets/font.woff2~BT~
+
+		By the same convention: ship the file and every widget is set in it; ship none
+		and the window uses the system's own. Nothing in the source names it either.
+
+		## A finger is not a mouse
+
+		Where the pointer is coarse, a button, a field and a checkbox stand **at least
+		44px tall** and a field's text is **16px** — below which a phone zooms the page on
+		focus and never zooms back. **No layout moves:** a ~BT~row~BT~ is a row at every width,
+		on every device.
+
+		## Two environment variables
+
+		| variable | does |
+		| --- | --- |
+		| ~BT~HIVE_WINDOW=print~BT~ | prints ~BT~hive-window <url>~BT~ instead of opening a browser |
+		| ~BT~HIVE_FOLDS=1~BT~ | prints, once a second, turns taken and drawn, the median, 90th-percentile and worst time in ~BT~update~BT~, ~BT~view~BT~ and sending the page, and the collections since |
+
+		An app from ~BT~hive export~BT~ takes ~BT~HIVE_FOLDS~BT~ as an intent extra — see
+		[cli](../cli.md).
+
 		## The window is a service
 
-		~BT~update~BT~ is **the same fold a [~BT~hive.syslink.spawn~BT~](syslink.md) handler is**,
-		and is checked as one. So a window **has an address**, needs no mutex, and can
-		be posted to by a background task or by another machine. That is why the module
-		needs no notion of a *command*.
+		~BT~update~BT~ is **a [~BT~hive.syslink.spawn~BT~](syslink.md) handler**, and is checked as
+		one. So a window **has an address** and can be posted to by a background task or
+		by another machine. That is why the module needs no notion of a *command*.
 
 		## The view is a ~BT~func~BT~, and that is not a formality
 
@@ -116,13 +139,14 @@ func ui(): Str {
 			])
 		}
 
-		proc update(state: State, message: Msg, from: hive.syslink.Envelope): State \{
+		proc update(state: mut State, message: Msg): Msg \{
 			if message is Msg.Typed(text) \{
-				return State(text, state.lines)
+				state.draft = text
+			} else if message is Msg.Send \{
+				append(state.lines, state.draft)
+				state.draft = ""
 			}
-			mut Str[dyn] next = state.lines
-			append(next, state.draft)
-			return State("", next)
+			return message
 		}
 
 		proc main(): void \{
@@ -255,9 +279,10 @@ func attributes(): Str {
 		| ~BT~voice(Voice)~BT~ ~BT~pitch(f)~BT~ ~BT~volume(f)~BT~ ~BT~track(path)~BT~ | a [sound](ui-scene-sound.md) |
 		| ~BT~eye(x, y, z)~BT~ ~BT~aim(yaw, pitch)~BT~ ~BT~lens(deg)~BT~ ~BT~fog(m)~BT~ | a [camera](ui-scene-camera.md) |
 		| ~BT~shadows(b)~BT~ ~BT~grab(b)~BT~ ~BT~crosshair(b)~BT~ | ~BT~Bool~BT~ — a scene |
+		| ~BT~grain(px)~BT~ ~BT~bits(n)~BT~ | ~BT~Int~BT~ — a scene [drawn coarsely](ui-scene-camera.md) |
 
 		**Watch the number type.** ~BT~gap~BT~, ~BT~pad~BT~, ~BT~width~BT~, ~BT~height~BT~, ~BT~grow~BT~, ~BT~heading~BT~,
-		~BT~lens~BT~ and ~BT~fog~BT~ take an ~BT~Int~BT~; everything geometric — ~BT~at~BT~, ~BT~turn~BT~, ~BT~eye~BT~,
+		~BT~lens~BT~, ~BT~fog~BT~, ~BT~grain~BT~ and ~BT~bits~BT~ take an ~BT~Int~BT~; everything geometric — ~BT~at~BT~, ~BT~turn~BT~, ~BT~eye~BT~,
 		~BT~aim~BT~, ~BT~region~BT~, ~BT~thick~BT~, ~BT~pitch~BT~, ~BT~volume~BT~ — takes a ~BT~Float~BT~. Hive never
 		widens a number, so ~BT~ui.at(0, 1, 0)~BT~ is a compile error and
 		~BT~ui.at(0.0, 1.0, 0.0)~BT~ is not.
@@ -281,6 +306,12 @@ func attributes(): Str {
 		~BT~width~BT~ and ~BT~height~BT~ are a fixed size; ~BT~align(ui.Align.Stretch())~BT~ is how a
 		child fills the cross axis instead.
 
+		**~BT~width~BT~ on a ~BT~row~BT~ or a ~BT~column~BT~ is a width, not a floor**: the box is never wider
+		than the space it is given, so ~BT~width(460)~BT~ is 460 where there is room and the
+		screen's width where there is not. A ~BT~canvas~BT~, a ~BT~scene~BT~ and an ~BT~image~BT~ keep the
+		width they asked for, since one wider than its box is what ~BT~scroll(Horizontal)~BT~
+		is for.
+
 		## State
 
 		~BT~disabled~BT~ takes a ~BT~Bool~BT~ rather than being present or absent, so it is
@@ -290,6 +321,10 @@ func attributes(): Str {
 		~BT~busy~BT~ says a widget is waiting; ~BT~placeholder~BT~ is the ghost text in an empty
 		~BT~input~BT~; ~BT~hint~BT~ is the note beside one. ~BT~kind~BT~ says what an ~BT~input~BT~ is for,
 		which is what gets a date picker or a hidden password.
+
+		~BT~kind(ui.InputKind.Range())~BT~ is a **slider** running 0–100, whose value and
+		~BT~onInput~BT~ text are that number. While it has focus it keeps only the keys that
+		move it, so a scene beside it still hears ~BT~escape~BT~.
 
 		## Colour
 
@@ -357,12 +392,13 @@ func events(): Str {
 
 		The five scene events are [ui-scene-input](ui-scene-input.md).
 
-		## There is no command, and nothing to return
+		## There is no command
 
-		The message goes to ~BT~update~BT~, which is [a fold](syslink.md): it answers with the
-		next state and nothing else. **Work that has to happen goes to a service** — a
-		window has an address, so anything with something to say posts a message back to
-		it when it has one.
+		The message goes to ~BT~update~BT~, which is [a service's handler](syslink.md): it writes
+		the state, and what it returns is read only by a request from another node.
+		**Work that has to happen goes to a service** — a window has an address, which
+		~BT~windowAddressed~BT~ hands to ~BT~update~BT~, so anything with something to say posts a
+		message back to it when it has one.
 	`)
 }
 
@@ -385,8 +421,8 @@ func enums(): Str {
 		| ~BT~InputKind~BT~ | ~BT~Text~BT~ ~BT~Number~BT~ ~BT~Date~BT~ ~BT~Password~BT~ ~BT~Search~BT~ ~BT~Range~BT~ |
 		| ~BT~Icon~BT~ | ~BT~Search~BT~ ~BT~Close~BT~ ~BT~Check~BT~ ~BT~Plus~BT~ ~BT~Minus~BT~ ~BT~Up~BT~ ~BT~Down~BT~ ~BT~Left~BT~ ~BT~Right~BT~ ~BT~Warning~BT~ ~BT~Info~BT~ ~BT~Star~BT~ ~BT~Heart~BT~ ~BT~Reply~BT~ ~BT~Repeat~BT~ ~BT~Trash~BT~ ~BT~User~BT~ ~BT~Menu~BT~ |
 		| [~BT~Tone~BT~](ui-colour.md) | ~BT~Normal~BT~ ~BT~Muted~BT~ ~BT~Good~BT~ ~BT~Warn~BT~ ~BT~Danger~BT~ ~BT~HEX(Str)~BT~ ~BT~RGBA(Int, Int, Int, Int)~BT~ |
-		| [~BT~Surface~BT~](ui-scene-surfaces.md) | eighteen finishes |
-		| [~BT~Voice~BT~](ui-scene-sound.md) | ~BT~Engine~BT~ ~BT~Tyres~BT~ ~BT~Brakes~BT~ ~BT~Wind~BT~ ~BT~Crowd~BT~ ~BT~Music~BT~ ~BT~Impact~BT~ ~BT~Chime~BT~ |
+		| [~BT~Surface~BT~](ui-scene-surfaces.md) | nineteen finishes |
+		| [~BT~Voice~BT~](ui-scene-sound.md) | ~BT~Engine~BT~ ~BT~Tyres~BT~ ~BT~Brakes~BT~ ~BT~Wind~BT~ ~BT~Crowd~BT~ ~BT~Music~BT~ ~BT~Impact~BT~ ~BT~Chime~BT~ ~BT~Talk~BT~ |
 
 		~CODE~hive
 		ui.text([ui.size(ui.TextSize.Caption()), ui.tone(ui.Tone.Muted())], "TURN 7")
@@ -536,7 +572,7 @@ func scene(): Str {
 
 		| page | what is on it |
 		| --- | --- |
-		| [ui-scene-shapes](ui-scene-shapes.md) | the eight shapes, and where one is |
+		| [ui-scene-shapes](ui-scene-shapes.md) | the ten shapes, and where one is |
 		| [ui-scene-surfaces](ui-scene-surfaces.md) | what a thing is made of |
 		| [ui-scene-sound](ui-scene-sound.md) | a noise is a shape |
 		| [ui-scene-camera](ui-scene-camera.md) | the eye, the sky, the fog, the shadows |
@@ -601,8 +637,10 @@ func sceneShapes(): Str {
 		| ~BT~sphere(attrs, radius)~BT~ | |
 		| ~BT~cylinder(attrs, radius, height)~BT~ | standing on its end |
 		| ~BT~cone(attrs, top, bottom, height)~BT~ | standing on its end, **both** radii |
+		| ~BT~roof(attrs, wide, tall, long)~BT~ | a ridge down its length, a slope each side, a gable each end |
 		| ~BT~ground(attrs, width, depth)~BT~ | a plane that **already lies flat** |
 		| ~BT~label(attrs, words)~BT~ | ~BT~Str~BT~ — words that always face the viewer |
+		| ~BT~sprite(attrs, image, wide, tall)~BT~ | a picture from ~BT~assets/~BT~ that always faces the viewer |
 		| ~BT~line(attrs, fromX, fromY, fromZ, toX, toY, toZ)~BT~ | |
 		| ~BT~sound(attrs, name)~BT~ | ~BT~Str~BT~ — [a noise at a place](ui-scene-sound.md) |
 
@@ -644,6 +682,17 @@ func sceneShapes(): Str {
 		**~BT~line~BT~ takes no ~BT~at~BT~**, because a line is *between* two places and has no
 		third one to call its own.
 
+		## A sprite stands on its place
+
+		~BT~sprite~BT~ names a picture under the program's own ~BT~assets/~BT~ and stands it in the
+		world ~BT~wide~BT~ by ~BT~tall~BT~ metres. Like a label it always faces the viewer and takes
+		no rotation, and **its place is its foot, not its middle** — one centred on its
+		position would be buried to the waist.
+
+		It is drawn **unfiltered**, pixel for pixel however near the camera gets, and
+		~BT~paint~BT~ *tints* it: a picture drawn white takes the colour asked for, and absent
+		it is untinted. A file that is not there draws nothing, and the scene carries on.
+
 		## Building the vector
 
 		A scene's shapes are an ordinary vector built by an ordinary ~BT~func~BT~, so the
@@ -667,20 +716,22 @@ func sceneSurfaces(): Str {
 	return page.backticked(`
 		# ~BT~hive.ui.scene~BT~ — surfaces
 
-		~BT~surface(Surface)~BT~ is **the finish**, as against ~BT~paint~BT~'s colour. Eighteen,
+		~BT~surface(Surface)~BT~ is **the finish**, as against ~BT~paint~BT~'s colour. Nineteen,
 		ordered from the ground up — what you drive on, then what things are built of,
 		then what they are finished in:
 
 		| | |
 		| --- | --- |
 		| ground | ~BT~Turf~BT~ ~BT~Gravel~BT~ ~BT~Tarmac~BT~ ~BT~Kerb~BT~ |
-		| built | ~BT~Concrete~BT~ ~BT~Brick~BT~ ~BT~Planks~BT~ ~BT~Staves~BT~ |
+		| built | ~BT~Concrete~BT~ ~BT~Brick~BT~ ~BT~Panes~BT~ ~BT~Planks~BT~ ~BT~Staves~BT~ |
 		| grown and gathered | ~BT~Bark~BT~ ~BT~Leaves~BT~ ~BT~Crowd~BT~ |
 		| open | ~BT~Mesh~BT~ |
 		| finished | ~BT~Speckle~BT~ ~BT~Metal~BT~ ~BT~Carbon~BT~ ~BT~Rubber~BT~ ~BT~Glass~BT~ ~BT~Gloss~BT~ |
 
 		**Every one is drawn *over* whatever colour the shape is**, so one pattern serves
-		a red kerb and a blue one, and ~BT~Gloss~BT~ adds no pattern at all.
+		a red kerb and a blue one, and ~BT~Gloss~BT~ adds no pattern at all. ~BT~Panes~BT~ is the
+		exception: its glass is a colour of its own, because a window is a different
+		material from the wall, and one lands in every couple of metres of surface.
 
 		## What a shape is made of when it does not say
 
@@ -767,7 +818,7 @@ func sceneSound(): Str {
 		| | ~BT~Voice~BT~ |
 		| --- | --- |
 		| **sustained** | ~BT~Engine~BT~ ~BT~Tyres~BT~ ~BT~Brakes~BT~ ~BT~Wind~BT~ ~BT~Crowd~BT~ ~BT~Music~BT~ |
-		| **struck** | ~BT~Impact~BT~ ~BT~Chime~BT~ |
+		| **struck** | ~BT~Impact~BT~ ~BT~Chime~BT~ ~BT~Talk~BT~ |
 
 		~CODE~hive
 		ui.sound([ui.at(car.x, 0.4, car.z), ui.voice(ui.Voice.Engine()),
@@ -803,7 +854,13 @@ func sceneSound(): Str {
 
 		The listener is the scene's own ~BT~eye~BT~ and ~BT~aim~BT~, so what is heard on the left
 		is what is drawn on the left, and a car goes past your ear as well as your eye.
-		**~BT~Music~BT~ is the exception**: it has nowhere to stand, so it is never panned.
+		The panning is **equal-power**, not a head model, which would convolve every one
+		of a grid's sixty voices.
+
+		**~BT~Music~BT~ and ~BT~Talk~BT~ are the exceptions**: neither has anywhere to stand, so
+		neither is panned. ~BT~Talk~BT~ is struck like an ~BT~Impact~BT~ and unpanned like ~BT~Music~BT~,
+		for anything said *about* a scene rather than in it — a commentator, a narrator
+		— which pinned to a place would be a voice the listener walks away from.
 
 		## Nothing is downloaded
 
@@ -856,6 +913,18 @@ func sceneCamera(): Str {
 		| ~BT~shadows(Bool)~BT~ | whether the sun casts. **Absent is yes** |
 		| ~BT~grab(Bool)~BT~ | whether the window should hold the mouse |
 		| ~BT~crosshair(Bool)~BT~ | whether to draw one in the middle |
+		| ~BT~grain(Int)~BT~ | the short edge the world is drawn into, in pixels |
+		| ~BT~bits(Int)~BT~ | how many bits of colour each channel keeps |
+
+		## A picture may be drawn coarsely
+
+		~BT~grain~BT~ renders the world into a buffer that many pixels on its short edge and
+		blows it up to the box **unfiltered** — a picture actually drawn small, not a
+		full-size one blurred; the long edge follows the box's shape. ~BT~bits~BT~ keeps that
+		many bits a channel, **dithered** in a fixed four-by-four pattern rather than
+		rounded, so a gradient comes out woven instead of banded. Together they are a
+		handheld's picture: ~BT~ui.grain(240), ui.bits(5)~BT~. Insets share the buffer.
+		Absent, a scene is drawn at its box's size in the screen's colour.
 
 		## Lighting is not something a scene describes
 
@@ -945,6 +1014,8 @@ func sceneInput(): Str {
 		| ~BT~onLook(f)~BT~ | ~BT~Float, Float~BT~ — how far the mouse moved, across and down |
 		| ~BT~onGrab(f)~BT~ | ~BT~Bool~BT~ — whether the window is holding the mouse now |
 		| ~BT~onPad(f)~BT~ | ~BT~Int, Str, Float~BT~ — which pad, which control, where it now is |
+		| ~BT~onSize(f)~BT~ | ~BT~Int, Int~BT~ — how wide and how tall the scene's box landed, in pixels |
+		| ~BT~onRate(f)~BT~ | ~BT~Int~BT~ — the screen's refresh rate, in hertz |
 
 		Each takes a function of what it reports, which is what a
 		[constructor with holes](ui-events.md) already is:
@@ -963,14 +1034,14 @@ func sceneInput(): Str {
 		program can keep up and are deliberately not the same when it cannot.
 
 		A window holds **at most one frame in flight**: having reported one it says
-		nothing more until the program has folded it, and while it waits the gap goes on
+		nothing more until the program has handled it, and while it waits the gap goes on
 		growing — so the frame that does go carries the whole of the time that passed. A
-		program that can fold sixty frames a second is told about sixty; one that can
+		program that can handle sixty frames a second is told about sixty; one that can
 		manage twenty is told about twenty, of fifty milliseconds each.
 
 		That is what makes it a clock. Were it one message per refresh regardless, a slow
 		program would be handed more frames than it could take, and since nothing between
-		the window and the fold ever drops a message the excess would **queue**: input
+		the window and ~BT~update~BT~ ever drops a message the excess would **queue**: input
 		would sit behind a backlog of stale frames, and a world stepped by the gaps in
 		them would run slower than real time.
 
@@ -978,13 +1049,21 @@ func sceneInput(): Str {
 		second**, because a world stepped by a full stall would teleport. So step the
 		world by what ~BT~onFrame~BT~ hands you and nothing else.
 
+		## ~BT~onSize~BT~ and ~BT~onRate~BT~
+
+		~BT~onSize~BT~ is said **when the scene starts listening and whenever its box changes
+		size, and at no other time** — keep it in the model, because a model that loses
+		it is not told again until the box moves. ~BT~onRate~BT~ is measured from the window's
+		own frames rather than the program's, and said when it changes, at most once a
+		second, between 20 and 480.
+
 		## Keys
 
 		**A key is named the same on every layout the browser can report**: a letter or
 		a digit is itself, and everything else is the word for it — ~BT~space~BT~, ~BT~enter~BT~,
 		~BT~escape~BT~, ~BT~tab~BT~, ~BT~shift~BT~, ~BT~ctrl~BT~, ~BT~up~BT~, ~BT~down~BT~, ~BT~left~BT~, ~BT~right~BT~.
 
-		Hold state is the program's: ~BT~onKeyDown~BT~ and ~BT~onKeyUp~BT~ are what a fold uses to
+		Hold state is the program's: ~BT~onKeyDown~BT~ and ~BT~onKeyUp~BT~ are what ~BT~update~BT~ uses to
 		keep its own set of what is held.
 
 		## The mouse

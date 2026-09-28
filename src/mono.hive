@@ -164,10 +164,15 @@ func spell(t: ast.TypeExpr): Str {
 	if t is ast.TypeExpr.VoidType {
 		return "void"
 	}
-	if t is ast.TypeExpr.Fn(_, params, result) {
+	if t is ast.TypeExpr.Fn(_, params, mutexes, result) {
 		mut out := "fn"
+		mut i := 0
 		for each p in params {
+			if types.mutexAt(mutexes, i) {
+				out = out + "mut"
+			}
 			out = out + spell(p)
+			i = i + 1
 		}
 		return out + spell(result)
 	}
@@ -287,12 +292,12 @@ proc substitute(mo: mut Mono, t: ast.TypeExpr, variables: Str[], args: ArgList):
 
 // A written type with every variable replaced by what it stands for here.
 func substituteVars(t: ast.TypeExpr, variables: Str[], args: ArgList): ast.TypeExpr {
-	if t is ast.TypeExpr.Fn(pure, params, result) {
+	if t is ast.TypeExpr.Fn(pure, params, mutexes, result) {
 		mut ast.TypeExpr[dyn] out = []
 		for each p in params {
 			append(out, substituteVars(p, variables, args))
 		}
-		return ast.TypeExpr.Fn(pure, out, substituteVars(result, variables, args))
+		return ast.TypeExpr.Fn(pure, out, mutexes, substituteVars(result, variables, args))
 	}
 	if t is ast.TypeExpr.Named(pkg, name, typeArgs, dims) {
 		if pkg == "" {
@@ -314,12 +319,12 @@ func substituteVars(t: ast.TypeExpr, variables: Str[], args: ArgList): ast.TypeE
 // A generic type written out — `Box<Str>` — is a copy of its own, and what it
 // is called after this is the copy's name.
 proc renameGenerics(mo: mut Mono, t: ast.TypeExpr): ast.TypeExpr {
-	if t is ast.TypeExpr.Fn(pure, params, result) {
+	if t is ast.TypeExpr.Fn(pure, params, mutexes, result) {
 		mut ast.TypeExpr[dyn] out = []
 		for each p in params {
 			append(out, renameGenerics(mo, p))
 		}
-		return ast.TypeExpr.Fn(pure, out, renameGenerics(mo, result))
+		return ast.TypeExpr.Fn(pure, out, mutexes, renameGenerics(mo, result))
 	}
 	if t is ast.TypeExpr.Named(pkg, name, typeArgs, dims) {
 		mut ast.TypeExpr[dyn] out = []
@@ -669,7 +674,7 @@ func match(param: ast.TypeExpr, given: types.Ty, variable: Str): Result<ast.Type
 		}
 		return Result.Error(false)
 	}
-	if param is ast.TypeExpr.Fn(_, params, result) {
+	if param is ast.TypeExpr.Fn(_, params, _, result) {
 		mut i := 0
 		for each p in params {
 			inner := match(p, parameterOf(given, i), variable)
@@ -713,7 +718,7 @@ func argumentOf(ty: types.Ty, index: Int): types.Ty {
 }
 
 func parameterOf(ty: types.Ty, index: Int): types.Ty {
-	if ty is types.Ty.TFn(_, params, _) {
+	if ty is types.Ty.TFn(_, params, _, _) {
 		if params bounds index {
 			return params[index]
 		}
@@ -722,7 +727,7 @@ func parameterOf(ty: types.Ty, index: Int): types.Ty {
 }
 
 func resultOf(ty: types.Ty): types.Ty {
-	if ty is types.Ty.TFn(_, _, result) {
+	if ty is types.Ty.TFn(_, _, _, result) {
 		return result
 	}
 	return types.Ty.TUnknown()

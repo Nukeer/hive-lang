@@ -16,20 +16,19 @@ type Model {
 	x: Int
 }
 
-proc update(model: Model, msg: Msg, from: hive.syslink.Envelope): Model {
-	mut Model next = model
+proc update(model: mut Model, msg: Msg): Msg {
 	if msg is Msg.Longer() {
-		next.words = model.words * 3
+		model.words = model.words * 3
 	} else if msg is Msg.Shorter() {
-		next.words = 1
+		model.words = 1
 	} else if msg is Msg.Cell() {
-		next.gap = model.gap + 7
+		model.gap = model.gap + 7
 	} else if msg is Msg.Row() {
-		next.rows = model.rows + 1
+		model.rows = model.rows + 1
 	} else if msg is Msg.Mark() {
-		next.x = model.x + 10
+		model.x = model.x + 10
 	}
-	return next
+	return msg
 }
 
 func words(n: Int): Str {

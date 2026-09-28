@@ -75,8 +75,9 @@ type        = "void"
             | fn-type
             | named-type ;
 
-fn-type     = ( "func" | "proc" ) "(" [ type-list ] ")" ":" type ;
-type-list   = type { "," type } ;
+fn-type     = ( "func" | "proc" ) "(" [ fn-params ] ")" ":" type ;
+fn-params   = fn-param { "," fn-param } ;
+fn-param    = [ "mut" ] type ;  (* `mut` only in a `proc` type *)
 
 named-type  = qualifier IDENT [ type-args ] { dim } ;
 qualifier   = { IDENT "." } ;

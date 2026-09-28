@@ -26,9 +26,8 @@
 // Two structural points worth copying into your own services:
 //
 //   1. The service OWNS the database — nothing else touches it. Every request
-//      arrives as a message and is handled one at a time, so there is no mutex
-//      anywhere and no way for two requests to race on the same row. The fold is
-//      the mutex.
+//      arrives as a message and is handled one at a time, so nothing needs a
+//      lock and no two requests can race on the same row.
 //   2. A service NEVER waits for another service from inside its own turn. Its
 //      turn would be blocked while it waited, so two nodes that asked each other
 //      at the same moment would deadlock. Fan-out to peers happens in the HTTP
@@ -43,6 +42,7 @@ type Cache {
 	// From this node's own HTTP handler.
 	Store { name: Str, value: Str }
 	Stored { name: Str }
+	Refused { name: Str }
 	// Between nodes. A `Lookup` is answered from the receiver's own database and
 	// is never forwarded — that is what stops a query circling the cluster.
 	Lookup { name: Str }
@@ -84,12 +84,12 @@ query forget(name: Str): void {
 }
 
 // The cache service. One turn per message, in order, with the database to
-// itself.
-proc cache(node: Node, msg: Cache, from: hive.syslink.Envelope): Node {
+// itself. Every turn answers with one of the mailbox's own messages.
+proc cache(node: mut Node, msg: Cache): Cache {
 	if msg is Cache.Store(name, value) {
 		if hive.sql.run(node.db, upsert(name, value)) is Result.Error(err) {
 			echo "  ! could not store {name}: {err.reason}: {err.message}"
-			return node
+			return Cache.Refused(name)
 		}
 		echo "  [db] stored {name}"
 
@@ -100,9 +100,7 @@ proc cache(node: Node, msg: Cache, from: hive.syslink.Envelope): Node {
 			peer := hive.syslink.on(endpoint, #Cache)
 			async peer(Cache.Invalidate(name))
 		}
-
-		hive.syslink.answer(from, Cache.Stored(name))
-		return node
+		return Cache.Stored(name)
 	}
 
 	if msg is Cache.Lookup(name) {
@@ -110,34 +108,28 @@ proc cache(node: Node, msg: Cache, from: hive.syslink.Envelope): Node {
 		// result is a vector of values — no header row to skip, and exactly one
 		// of them is the hit.
 		if hive.sql.run(node.db, lookup(name)) is Result.Ok(values) && values is [value] {
-			hive.syslink.answer(from, Cache.Found(name, value))
-			return node
+			return Cache.Found(name, value)
 		}
-		hive.syslink.answer(from, Cache.Missing(name))
-		return node
+		return Cache.Missing(name)
 	}
 
 	if msg is Cache.Invalidate(name) {
 		dropped := hive.sql.run(node.db, forget(name))
 		if dropped is Result.Error(err) {
 			echo "  ! could not drop {name}: {err.reason}: {err.message}"
-			return node
+			return msg
 		}
 		// A statement reports how many rows it touched, so this node can say
 		// whether it actually held the name rather than guessing.
 		if dropped is Result.Ok(n) && n > 0 {
 			echo "  [db] dropped {name}; another node owns it now"
 		}
-		return node
+		return msg
 	}
 
-	// Stored / Found / Missing are answers, not requests: nothing sends them here,
-	// and a service that receives one has nothing to do with it. Note that this
-	// branch answers nothing — so if anything ever did *wait* for one of them, it
-	// would come straight back as `NoReply` rather than hanging until its timeout.
-	// Every envelope in this handler only ever reaches `answer`, so the compiler
-	// can see that no reply is ever coming once a turn ends.
-	return node
+	// Stored / Refused / Found / Missing are answers, not requests: one sent here
+	// comes back as it came.
+	return msg
 }
 
 // The HTTP front door. It never touches the database — it asks the service, like

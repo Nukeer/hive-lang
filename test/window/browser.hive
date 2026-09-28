@@ -31,20 +31,26 @@ proc tab(port: Str, page: Str): Str {
 	for tries := 0; tries < 100; tries++ {
 		got := hive.net.httpRequest(hive.net.HttpRequest("GET", "http://127.0.0.1:{port}/json/list", [], ""))
 		if got is Result.Ok(response) {
-			listed := hive.json.flatten(response.body)
-			if listed is Result.Ok(rows) {
-				for each row in rows {
-					if row bounds 1 {
-						if row[1] == page && row[0] is "{at}.url" {
-							if hive.json.get(rows, "{at}.webSocketDebuggerUrl") is Result.Ok(socket) {
-								return socket
-							}
-						}
+			listed := hive.json.JsonValue.decode(response.body, hive.json.codec())
+			if listed is Result.Ok(doc) && doc is hive.json.JsonValue.Array(targets) {
+				for each target in targets {
+					socket := stringAt(target, "webSocketDebuggerUrl")
+					if stringAt(target, "url") == page && socket != "" {
+						return socket
 					}
 				}
 			}
 		}
 		hive.task.sleep(100)
+	}
+	return ""
+}
+
+func stringAt(v: hive.json.JsonValue, key: Str): Str {
+	if v is hive.json.JsonValue.Object(properties) {
+		if hive.map.get(properties, key) is Result.Ok(value) && value is hive.json.JsonValue.String(s) {
+			return s
+		}
 	}
 	return ""
 }

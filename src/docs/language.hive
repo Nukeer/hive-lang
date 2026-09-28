@@ -371,8 +371,9 @@ func types(): Str {
 
 		Written like a declaration with the name dropped: ~BT~func(Int): Int~BT~,
 		~BT~proc(hive.net.HttpRequest): hive.net.HttpResponse~BT~. A ~BT~func~BT~ value may be used
-		where a ~BT~proc~BT~ is expected; a ~BT~proc~BT~ value may not fill a ~BT~func~BT~ slot. ~BT~mut~BT~ may
-		not appear in a function type.
+		where a ~BT~proc~BT~ is expected; a ~BT~proc~BT~ value may not fill a ~BT~func~BT~ slot. A ~BT~proc~BT~
+		type may mark a parameter ~BT~mut~BT~ — ~BT~proc(mut Str[dyn], Str): void~BT~ — and a ~BT~func~BT~
+		type may not. ~BT~proc(mut Int): void~BT~ and ~BT~proc(Int): void~BT~ are different types.
 
 		## Maps
 
@@ -707,9 +708,16 @@ func expressions(): Str {
 		so ~BT~Msg.Changed~BT~ on its own is a compile error and the hole is what makes one
 		a function value.
 
-		Three things cannot become values: a **generic** callable, a callable with a
-		**mutex parameter**, and a callable with a **statically-sized parameter** beyond
-		one immutable local binding it is called through.
+		A callable with a **mutex parameter** is a value like any other: ~BT~grow(_, "x")~BT~
+		is a ~BT~proc(mut Str[dyn]): void~BT~. A mutex position in a partial application
+		stays a hole, since what is supplied is captured by value. A call through a
+		function value is held to its type — how many arguments, what each one is, and a
+		~BT~mut~BT~ variable wherever the type says ~BT~mut~BT~ — and by position only: its
+		parameters have no names, so a named argument is refused.
+
+		Two things cannot become values: a **generic** callable, and a callable with a
+		**statically-sized parameter** beyond one immutable local binding it is called
+		through.
 
 		## Member access, indexing, slicing
 
@@ -1016,7 +1024,8 @@ func mutability(): Str {
 		in — never the reverse.
 
 		~BT~mut~BT~ may not appear anywhere else a type can: **not on a field, not on a
-		return, not in a ~BT~proc(...)~BT~ type**. A ~BT~mut~BT~ variable may not be ~BT~UPPER_CASE~BT~.
+		return, not in a ~BT~func(...)~BT~ type** — a ~BT~proc(...)~BT~ type may mark a parameter
+		~BT~mut~BT~. A ~BT~mut~BT~ variable may not be ~BT~UPPER_CASE~BT~.
 
 		## Mutex parameters
 
@@ -1043,10 +1052,12 @@ func mutability(): Str {
 		A call you wait for *there* hands over the caller's storage; an ~BT~async~BT~ or
 		~BT~await~BT~ed one hands over a copy — a thread of its own gets storage of its own.
 
-		A callable with a mutex parameter can be neither referenced (~BT~f~BT~) nor partially
-		applied (~BT~f(1, _)~BT~): a function value has no call site to take a mutex from.
-		And passing a variable to a ~BT~mut~BT~ parameter costs it every length and index fact
-		[already proved](bounds.md) about it, since the callee may rebind it shorter.
+		The same holds through a function value: ~BT~f := grow~BT~ then ~BT~f(v, "d")~BT~ grows ~BT~v~BT~,
+		and ~BT~async f(v, "e")~BT~ grows a copy. A mutex position in a partial application
+		stays a hole — ~BT~grow(_, "f")~BT~ — since what is supplied is captured by value.
+		Passing a variable to a ~BT~mut~BT~ parameter, by name or through a value, costs it
+		every length and index fact [already proved](bounds.md) about it, since the callee
+		may rebind it shorter.
 
 		## What a value is
 
@@ -1217,7 +1228,7 @@ func concurrency(): Str {
 
 		No channel type, no mutex primitive, no thread handle, no cancellation token and
 		no scheduler to configure. A program that needs long-lived shared state reaches
-		for a [service](stdlib/syslink.md), whose handler is a fold over its mailbox and
+		for a [service](stdlib/syslink.md), whose handler takes one message at a time and
 		therefore needs no lock at all; a program that needs a result from work in
 		flight names it.
 
@@ -1326,7 +1337,8 @@ func proofs(): Str {
 
 		* **rebinding** the vector, including in a branch that may not run;
 		* **~BT~drop~BT~**, the one builtin that makes a vector shorter;
-		* passing the vector to a **~BT~mut~BT~ parameter~BT~**, since the callee may rebind it;
+		* passing the vector to a **~BT~mut~BT~ parameter**, by name or through a function
+		  value, since the callee may rebind it;
 		* replacing a **field** that held it.
 
 		~BT~drop(v, low, high)~BT~ removes ~BT~low~BT~ through ~BT~high~BT~ **inclusive** and its bounds
@@ -1558,7 +1570,8 @@ func modules(): Str {
 		~CODE~
 
 		The path is the module and nothing else — ~BT~import hive.ui~BT~, never
-		~BT~import hive.ui.View~BT~. **Nothing is imported into the program**: the alias is a
+		~BT~import hive.ui.View~BT~ — and a module this compiler does not carry
+		(~BT~import hive.jsno~BT~) is refused at the import, not at every use of it. **Nothing is imported into the program**: the alias is a
 		*spelling*, ~BT~ui.row~BT~ and ~BT~hive.ui.row~BT~ are the same call, both are always
 		available, and neither changes what is linked. ~BT~import hive~BT~ is not a thing to
 		write.
@@ -1678,7 +1691,7 @@ func builtins(): Str {
 		| ~BT~Result<T, E>~BT~ | every ~BT~Error~BT~ before every ~BT~Ok~BT~ |
 		| a struct | field by field, in declaration order |
 		| a tagged union | by **variant** first, in declaration order, then its fields |
-		| a function value, a service address | none — a compile error |
+		| a map, a function value, a service address, or a type holding one | none — a compile error |
 
 		**Two arguments** order by a ~BT~func~BT~ of your own answering whether its first
 		element comes before its second — also the answer for an element type with no
@@ -2015,9 +2028,36 @@ func cli(): Str {
 		* **~BT~hive analyze~BT~** scores what the program will cost to run. It builds
 		  nothing and runs nothing, so it answers about as fast as ~BT~check~BT~ does.
 
-		~BT~--target~BT~ belongs to ~BT~build~BT~ and nothing else; ~BT~go tool dist list~BT~ names every
-		platform it takes. A flag a command does not know is **refused rather than
+		~BT~--target~BT~ belongs to ~BT~build~BT~ and ~BT~export~BT~; ~BT~go tool dist list~BT~ names every
+		platform ~BT~build~BT~ takes. A flag a command does not know is **refused rather than
 		quietly dropped**.
+
+		## ~BT~hive export~BT~
+
+		~CODE~
+		hive export chat.hive --target android/arm64     writes chat-android-arm64.apk
+		~CODE~
+
+		The same program ~BT~hive build~BT~ writes, with a WebView host in front of it, signed
+		and installable as it stands. **No Android SDK and no network**: the manifest,
+		resource table and APK Signature Scheme v2 signature are written by the build,
+		under a key made on first use at ~BT~~/.hive/android.key~BT~ so a later build installs
+		over an earlier one. The application id comes from the entrypoint —
+		~BT~chat.hive~BT~ is ~BT~hive.chat~BT~ — and ~BT~assets/icon.png~BT~ is the launcher icon.
+
+		* ~BT~android/arm64~BT~ is the only Android target, and a program that opens no window
+		  is refused: an app with nothing to show has no way to start.
+		* The app asks for ~BT~INTERNET~BT~ and ~BT~ACCESS_NETWORK_STATE~BT~; its ~BT~$HOME~BT~ and
+		  working directory are its own files directory, and what it prints goes to
+		  logcat.
+		* It runs with ~BT~GOGC=off~BT~ and ~BT~GOMEMLIMIT=256MiB~BT~, because a window rebuilds
+		  its world every frame over a small live heap. An intent extra named
+		  ~BT~HIVE_FOLDS~BT~, ~BT~GOGC~BT~ or ~BT~GOMEMLIMIT~BT~ reaches the program's environment
+		  (those three alone), and ~BT~HIVE_INSPECT~BT~ lets ~BT~chrome://inspect~BT~ attach:
+
+		~CODE~
+		adb shell am start -n hive.chat/dev.hive.app.MainActivity --es HIVE_FOLDS 1
+		~CODE~
 
 		## Diagnostics
 
@@ -2075,6 +2115,24 @@ func cli(): Str {
 		a cost here runs from four to thirty thousand and a linear curve would put
 		everything past the first loop at zero. A callable cheap enough to say nothing
 		about scores 100.
+
+		## ~BT~hive container~BT~
+
+		Writes a Dockerfile into the folder it runs in — ~BT~Dockerfile~BT~, or
+		~BT~Dockerfile-hive-container~BT~ when one is already there — and says which:
+
+		~CODE~
+		hive container main.hive
+		docker build -t main .
+		docker run --rm -p 8080:8080 main
+		~CODE~
+
+		Nothing but Docker is needed. The first stage downloads Go and **the compiler
+		that wrote the file**, named in ~BT~ARG HIVEC_VERSION~BT~, so an image never
+		follows a newer release on its own; the second is the executable alone on
+		~BT~distroless/static~BT~. What is not a template is read off the program: a
+		~BT~hive.net.httpServe(8080, ...)~BT~ becomes ~BT~EXPOSE 8080~BT~, and an import naming a
+		repository puts ~BT~git~BT~ in the build stage.
 
 		## ~BT~hive agents~BT~
 
@@ -2220,7 +2278,7 @@ func pitfalls(): Str {
 		## Generics and values
 
 		**A generic callable cannot be used as a value**, and neither can one with a
-		mutex parameter or a statically-sized parameter it is handed on from.
+		statically-sized parameter it is handed on from.
 
 		**A type variable that appears only in the return type** cannot be inferred.
 

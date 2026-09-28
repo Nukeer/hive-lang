@@ -116,6 +116,6 @@ if slowShout("worth waiting for") with timeout 100 is Result.Error(err) {
 
 There is no channel type, no mutex primitive, no thread handle, no cancellation
 token and no scheduler to configure. A program that needs long-lived shared state
-reaches for a [service](14-stdlib.md#1410-hivesyslink), whose handler is a fold
-over its mailbox and therefore needs no lock at all; a program that needs a
+reaches for a [service](14-stdlib.md#1410-hivesyslink), whose handler takes one
+message at a time and therefore needs no lock at all; a program that needs a
 result from work in flight names it.

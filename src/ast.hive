@@ -25,8 +25,8 @@ type TypeExpr {
 	// `Str`, `T`, `Result<T, E>`, `hive.map.Map<Str, Int>`, `Str[3][2]`.
 	// `pkg` is `""` when the name was written unqualified.
 	Named { pkg: Str, name: Str, args: TypeExpr[dyn], dims: Dim[dyn] }
-	// `func(Int): Int` (pure) or `proc(Int): void`.
-	Fn { pure: Bool, params: TypeExpr[dyn], result: TypeExpr }
+	// `func(Int): Int` (pure) or `proc(mut Int): void`.
+	Fn { pure: Bool, params: TypeExpr[dyn], mutexes: Bool[dyn], result: TypeExpr }
 	// The return type that is no type at all.
 	VoidType
 }
