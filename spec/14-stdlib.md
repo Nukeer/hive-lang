@@ -17,7 +17,8 @@ map's key, a service's message, a query's rows — nothing is claimed about *tha
 type, but the count still stands. One of a module's own types is built by naming
 its fields, so it is held to those and a named argument may come in any order.
 A library type written down has to be one the module has: `hive.syslink.Nonesuch`
-is a compile error wherever a type is written.
+is a compile error wherever a type is written, and so is a variant one of the
+module's enumerations does not have — `hive.ui.TextSize.Small()`.
 
 **A module you don't use is not in your build**
 ([12](12-modules.md#127-what-is-linked)). Every module but two is written against
@@ -88,11 +89,13 @@ A dictionary: keys paired with values, looked up by key. Type-level rules are in
 * **A map is a value**, and so is what comes out of it: `keys` and `values` are
   fresh vectors.
 * **`==` compares the pairs** and ignores the order they were set in. There is no
-  ordering *between* maps, so `sort` on a vector of them is a compile error.
+  ordering *between* maps, so `sort` on a vector of them — or of a type holding
+  one — is a compile error.
 * **A map does not travel and does not encode.** `encode` refuses one
   and so does a `hive.syslink` mailbox: decoding here is by declared shape, while
   a map's keys are whatever was put in it. Send its pairs as a vector of a type
-  declared for them.
+  declared for them. The one exception is the properties of a
+  [`hive.json.JsonValue`](#147-hivejson) object, whose codec is the document itself.
 * `import hive.map` names the module `map`, which **coexists with the
   `map(v, f)` builtin**: a call on the name is the module and a bare call is the
   builtin. Nothing has to choose, because the two are told apart by shape.
@@ -326,8 +329,8 @@ type User {
 ```
 
 **A document whose shape is not declared** is a `hive.json.JsonValue`, which the
-module declares as an ordinary union — built, matched, compared and sorted like
-one of the program's own:
+module declares as an ordinary union — built, matched and compared like one of
+the program's own:
 
 ```hive
 type JsonValue {
@@ -336,12 +339,7 @@ type JsonValue {
 	Int { value: Int }
 	Float { value: Float }
 	Array { values: JsonValue[dyn] }
-	Object { properties: KV[dyn] }
-}
-
-type KV {
-	key: Str
-	value: JsonValue
+	Object { properties: hive.map.Map<Str, JsonValue> }
 }
 ```
 
@@ -350,7 +348,11 @@ type KV {
   document, and `encode` writes one back.
 * A number is an `Int` where it reads as one, and a `Float` otherwise; a `Float`
   is written with a `.0` or an exponent, so a round trip keeps which it was.
-* An object keeps its members in document order, a repeated key included.
+* An object's properties are a [map](#143-hivemap): `hive.map.get(properties, "name")`
+  reads one, and they keep the order the document wrote them in. A key written
+  twice keeps its first place and its last value.
+* An object holds a map, so a `JsonValue` has **no order** and `sort` over them
+  needs the `func` that says which comes first.
 * **No variant is `null`**, so a `null` anywhere is an error at its path.
 * `hive.json.JsonValue.<Variant>.decode` is refused: a document says which
   variant it is.
@@ -636,6 +638,10 @@ history is in it, and quitting a browser does not close it. Closing the window
 ends the program. A machine with no Chromium-family browser falls back to an
 ordinary tab, which is the one case where the window belongs to a browser.
 
+**Its typeface is `assets/font.woff2`**, where the program ships one, by the same
+convention: every widget is set in it, and a program with none is set in the
+system's own. Nothing in the source names it.
+
 **Its icon is `assets/icon.png`**, beside the entrypoint: a PNG of at most
 256×256, embedded into the executable by the build. It is **the program's** icon
 rather than the window's — any program may ship one, and on Windows the
@@ -647,6 +653,13 @@ image, so there is one place to put it.
 
 On Windows a **built** windowed program also carries no console, so what opens is
 the window and nothing else.
+
+Two environment variables are read by a window, and by nothing else:
+
+| variable | does |
+| --- | --- |
+| `HIVE_WINDOW=print` | prints `hive-window <url>` instead of opening a browser, for whatever is going to show the page |
+| `HIVE_FOLDS=1` | prints, once a second, how many turns the window took and drew, the median, 90th-percentile and worst time each spent in `update`, `view` and sending the page, and the collections since the last line |
 
 **The window is a service.** `update` is a `hive.syslink.spawn` handler —
 `proc (mut State, Msg): Msg` — and is checked as one, so a window has an address
@@ -729,6 +742,10 @@ it, and that is what scrolling one sideways means.
 `on` and `onDismiss` carry the message itself; the rest carry a **function** of
 what the user did, which is what a constructor with a hole is for:
 `ui.onInput(Msg.Changed(_))`.
+
+`ui.kind(ui.InputKind.Range())` makes an `input` a slider running 0–100, whose
+value and `onInput` text are that number. While it has focus it keeps only the
+keys that move it, so a scene beside it still hears `Escape`.
 
 The enumerations are ordinary closed types (`Align`, `Justify`, `TextSize`,
 `Tone`, `Axis`, `InputKind`, `Icon`), reached the way every other type is. None
@@ -843,7 +860,7 @@ nothing is drawn, and the scene carries on.
 *own* lateral axis and `z` about its own length, so a thing yawed to face somewhere
 and then pitched tips nose-up the way it is facing.
 
-`Surface` is the finish, as against `paint`'s colour. Eighteen, ordered from the
+`Surface` is the finish, as against `paint`'s colour. Nineteen, ordered from the
 ground up — what you drive on, then what things are built of, then what they are
 finished in:
 
@@ -970,7 +987,9 @@ it back is a second one.
 Sounds are **positioned**, and the listener is the scene's own `eye` and `aim` —
 so what is heard on the left is what is drawn on the left, and a car goes past
 your ear as well as your eye. `Music` and `Talk` are the exceptions: neither has
-anywhere to stand, so neither is ever panned.
+anywhere to stand, so neither is ever panned. The panning is **equal-power**
+rather than a head model: a head model convolves every voice, and a racing grid
+is sixty of them.
 
 **`Talk` is struck and unpanned, and it needs to be both.** A struck voice is
 positioned once and never moved, because a thing that has happened has nowhere
@@ -1155,6 +1174,7 @@ unshadowed.
 | `onLook(f)` | `Float, Float` — how far the mouse moved, across and down |
 | `onGrab(f)` | `Bool` — whether the window is holding the mouse now |
 | `onPad(f)` | `Int, Str, Float` — which pad, which control, where it now is |
+| `onRate(f)` | `Int` — the screen's refresh rate, in hertz |
 | `onSize(f)` | `Int, Int` — how wide and how tall the scene's box is, in pixels |
 
 **`onFrame` reports the time since the last frame the program was told about, and
@@ -1166,6 +1186,12 @@ frame that does go carries the whole of the time that passed. A program that can
 handle sixty frames a second is therefore told about sixty of them; one that can
 manage twenty is told about twenty, of fifty milliseconds each, rather than sixty
 of seventeen.
+
+**`onSize` is said when the scene starts listening and whenever its box changes
+size, and at no other time.** It is the one number a view cannot work out for
+itself, and a program that loses it is not told again until the box moves.
+`onRate` is measured from the gaps between the window's own frames, not the
+program's, and said when it changes, at most once a second, between 20 and 480.
 
 **A frame is reported before the window draws it, not after.** The picture a
 window is about to paint was described by the turn before this one, so nothing is

@@ -19,6 +19,8 @@ ada Ada
 {"name":"ada","tags":["x",1,2.5,true],"ratio":1.0}
 tags holds 4
 ratio is a Float
+name is ada
 {"kind":"count","body":{"n":3}}
 true
+{"a":3,"b":2}
 $[1]: found null

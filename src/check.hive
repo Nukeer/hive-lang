@@ -1608,6 +1608,10 @@ proc checkBuiltinCall(c: mut Check, env: infer.Env, name: Str, args: ast.Arg[]):
 // `sort(v)` orders a vector by its element type's own order; `sort(v, first)`
 // orders it by a `func` answering whether its first element comes before its
 // second.
+func isEnumeration(module: Str, name: Str): Bool {
+	return len(stdlib.variantsOf(module, name)) > 0
+}
+
 proc checkSort(c: mut Check, env: infer.Env, args: ast.Arg[]): void {
 	if len(args) != 1 && len(args) != 2 {
 		report(c, "`sort` takes a vector, and optionally the `func` that says which of two elements comes first")
@@ -1618,10 +1622,14 @@ proc checkSort(c: mut Check, env: infer.Env, args: ast.Arg[]): void {
 		report(c, "`sort` orders a vector, and this is " + types.show(subject))
 		return
 	}
+	element := types.elementOf(subject)
 	if len(args) == 1 {
+		if isVector(subject) && types.isOrdered(env.table, element, isEnumeration) == false {
+			report(c, "`sort` puts a vector in its elements' own order, and " + types.show(element)
+				+ " has none: a map, an address and a function value have no order, and nor does a type holding one. Hand `sort` the `func` that says which of two comes first")
+		}
 		return
 	}
-	element := types.elementOf(subject)
 	fits(c, types.Ty.TFn(true, [element, element], [false, false], types.Ty.TBool()), typeOfArg(c, env, args, 1),
 		"the order `sort` was given")
 }

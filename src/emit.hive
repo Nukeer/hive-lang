@@ -3629,7 +3629,6 @@ proc emitCodec(em: mut Emit, name: Str): void {
 // A `JsonValue` is the document as written, never `{"String":{"value":...}}`.
 // A number is an `Int` where it reads as one, so `1.0` stays a `Float`.
 proc emitJsonValueDecoder(em: mut Emit, name: Str): void {
-	kv := goIdent(stdlib.flatName("json", "KV"))
 	blank(em)
 	open(em, "func " + decoderName(name) + "(v hive.JsonValue, path string) (" + goIdent(name) + ", *hive.JsonJsonError) \{")
 	open(em, "if v.Kind == 's' \{")
@@ -3652,11 +3651,11 @@ proc emitJsonValueDecoder(em: mut Emit, name: Str): void {
 	line(em, "return " + goVariant(name, "Array") + "\{Values: values}, nil")
 	close(em, "}")
 	open(em, "if v.Kind == 'o' \{")
-	line(em, "properties := make([]" + kv + ", 0, len(v.Obj))")
+	line(em, "properties := hive.NewDict[string, " + goIdent(name) + "]()")
 	open(em, "for _, m := range v.Obj \{")
 	line(em, "value, jerr := " + decoderName(name) + "(m.Value, path+\".\"+m.Key)")
 	bailOut(em, "nil")
-	line(em, "properties = append(properties, " + kv + "\{Key: m.Key, Value: value})")
+	line(em, "properties.Set(m.Key, value)")
 	close(em, "}")
 	line(em, "return " + goVariant(name, "Object") + "\{Properties: properties}, nil")
 	close(em, "}")
@@ -3665,7 +3664,6 @@ proc emitJsonValueDecoder(em: mut Emit, name: Str): void {
 }
 
 proc emitJsonValueEncoder(em: mut Emit, name: Str): void {
-	kv := goIdent(stdlib.flatName("json", "KV"))
 	blank(em)
 	open(em, "func " + encoderName(name) + "(x " + goIdent(name) + ") string \{")
 	encodeJsonVariant(em, name, "String", "hive.JsonEncodeStr(v.Value)")
@@ -3673,7 +3671,7 @@ proc emitJsonValueEncoder(em: mut Emit, name: Str): void {
 	encodeJsonVariant(em, name, "Int", "hive.JsonEncodeInt(v.Value)")
 	encodeJsonVariant(em, name, "Float", "hive.JsonEncodeFraction(v.Value)")
 	encodeJsonVariant(em, name, "Array", "hive.JsonEncodeVec(v.Values, " + encoderName(name) + ")")
-	encodeJsonVariant(em, name, "Object", "hive.JsonEncodeMembers(v.Properties, func(p " + kv + ") (string, string) \{ return p.Key, " + encoderName(name) + "(p.Value) })")
+	encodeJsonVariant(em, name, "Object", "hive.JsonEncodeDict(v.Properties, " + encoderName(name) + ")")
 	line(em, "return " + quoted("null"))
 	close(em, "}")
 }

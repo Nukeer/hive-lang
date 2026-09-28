@@ -88,11 +88,7 @@ proc greet(request: hive.net.HttpRequest): hive.net.HttpResponse {
 
 func member(v: hive.json.JsonValue, key: Str): Result<hive.json.JsonValue, Bool> {
 	if v is hive.json.JsonValue.Object(properties) {
-		for each p in properties {
-			if p.key == key {
-				return Result.Ok(p.value)
-			}
-		}
+		return hive.map.get(properties, key)
 	}
 	return Result.Error(false)
 }

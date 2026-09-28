@@ -160,6 +160,19 @@ test "a partial application never captures a mutex" {
 		"in `main`: `grow` asks for the mutex itself in `v: mut ...`, and a partial application captures")
 }
 
+test "sort needs an order, and a map, an address or a type holding one has none" {
+	assert opens(problem(inMain("hive.map.Map<Str, Int>[dyn] ms = [hive.map.new()]  echo len(sort(ms))")),
+		"in `main`: `sort` puts a vector in its elements' own order, and hive.map.Map<Str, Int> has none")
+	assert opens(problem(inMain("v := [hive.json.JsonValue.Int(1)]  echo sort(v)")),
+		"in `main`: `sort` puts a vector in its elements' own order, and hive.json.JsonValue has none")
+	boxed := "type Box \{ at: hive.syslink.Address }\n"
+	assert opens(problem(boxed + inMain("v := [Box(hive.syslink.at(#A))]  echo len(sort(v))")),
+		"in `main`: `sort` puts a vector in its elements' own order, and Box has none")
+	assert problemCount(inMain("v := [hive.json.JsonValue.Int(1)]  echo sort(v, before)") + "\nfunc before(a: hive.json.JsonValue, b: hive.json.JsonValue): Bool \{ return false }") == 0
+	assert problemCount(inMain("echo sort([3, 1, 2])")) == 0
+	assert problemCount(inMain("echo sort([hive.ui.Align.End(), hive.ui.Align.Start()])")) == 0
+}
+
 test "a service's handler writes its state and answers with one of its own messages" {
 	note := "type Note \{ Say \{ text: Str } }\n"
 	good := "proc inbox(n: mut Int, note: Note): Note \{ return note }\n"
@@ -676,7 +689,8 @@ test "the json module no longer flattens a document into a table" {
 // --- An undeclared document --------------------------------------------------
 
 test "a JsonValue is built, matched and read like any declared type" {
-	assert problemCount(inMain("v := hive.json.JsonValue.Object([hive.json.KV(\"a\", hive.json.JsonValue.Int(1))])  if v is hive.json.JsonValue.Object(props) \{ for each p in props \{ echo p.key } }")) == 0
+	assert problemCount(inMain("mut hive.map.Map<Str, hive.json.JsonValue> fields = hive.map.new()  hive.map.set(fields, \"a\", hive.json.JsonValue.Int(1))  v := hive.json.JsonValue.Object(fields)  if v is hive.json.JsonValue.Object(props) \{ for each key in hive.map.keys(props) \{ echo key } }")) == 0
+	assert problemCount(inMain("echo hive.json.JsonValue.Object(hive.map.new())")) == 0
 	assert problemCount("import hive.json\nfunc f(v: json.JsonValue): Bool \{ return v is json.JsonValue.Array(_) }\nproc main(): void \{ echo f(json.JsonValue.Boolean(true)) }") == 0
 	assert problemCount(inMain("if hive.json.JsonValue.decode(\"1\", hive.json.codec()) is Result.Ok(v) \{ echo encode(v, hive.json.codec()) }")) == 0
 	assert problemCount("type Doc \{ data: hive.json.JsonValue }\n" + inMain("if Doc.decode(\"x\", hive.json.codec()) is Result.Ok(d) \{ echo d.data }")) == 0
@@ -685,8 +699,8 @@ test "a JsonValue is built, matched and read like any declared type" {
 test "a JsonValue is named as it was written" {
 	assert opens(problem(inMain("echo hive.json.JsonValue.Null()")),
 		"in `main`: `hive.json.JsonValue` has no variant `Null`")
-	assert opens(problem(inMain("echo hive.json.KV(\"a\", hive.json.JsonValue.Int(1)).name")),
-		"in `main`: `hive.json.KV` has no field `name`")
+	assert opens(problem(inMain("echo hive.json.KV(\"a\", hive.json.JsonValue.Int(1))")),
+		"in `main`: `hive.json` has no `KV`")
 	assert opens(problem(inMain("hive.json.JsonValue v = hive.json.JsonValue.Int(1)  Int n = v")),
 		"in `main`: the declaration of `n` wants Int and this is hive.json.JsonValue")
 }

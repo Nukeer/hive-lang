@@ -263,12 +263,7 @@ func declarationsOf(module: Str): Str {
 				Int \{ value: Int }
 				Float \{ value: Float }
 				Array \{ values: JsonValue[dyn] }
-				Object \{ properties: KV[dyn] }
-			}
-
-			type KV \{
-				key: Str
-				value: JsonValue
+				Object \{ properties: hive.map.Map<Str, JsonValue> }
 			}
 		`
 	}

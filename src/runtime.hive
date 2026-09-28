@@ -2467,21 +2467,21 @@ func jsonSource(): Str {
 			return s + ".0"
 		}
 
-		func JsonEncodeMembers[T any](items []T, member func(T) (string, string)) string \{
+		func JsonEncodeDict[V any](d Dict[string, V], value func(V) string) string \{
 			var b strings.Builder
 			b.WriteByte('\{')
-			for i, item := range items \{
+			for i, key := range d.order \{
 				if i > 0 \{
 					b.WriteByte(',')
 				}
-				key, value := member(item)
 				b.WriteString(JsonEncodeStr(key))
 				b.WriteByte(':')
-				b.WriteString(value)
+				b.WriteString(value(d.byKey[key]))
 			}
 			b.WriteByte('}')
 			return b.String()
 		}
+
 		`,
 		// JsonEncodeDynamic is the fallback when the compiler couldn't infer a
 		// static type for hive.json.encode's argument.

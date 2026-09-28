@@ -201,6 +201,23 @@ execute from — beside a fixed WebView host, a binary `AndroidManifest.xml`, an
 `assets/icon.png` as the launcher icon where the program ships one. The
 application id is derived from the entrypoint, so `chat.hive` is `hive.chat`.
 
+**What the program is started in.** Its working directory and `$HOME` are the
+app's own files directory and `$TMPDIR` its cache, so `.env` and the syslink
+cluster key live there. The manifest asks for `INTERNET` and
+`ACCESS_NETWORK_STATE`: the second is what lets the host write the network's DNS
+servers to `$HOME/.hive/resolvers` at start and whenever the network changes,
+since a handset has no `/etc/resolv.conf` for a lookup to read. What the program
+prints goes to logcat. The collector is set to `GOGC=off` with
+`GOMEMLIMIT=256MiB`: a window builds its whole world every frame over a live heap
+of a megabyte or two, which Go's default would collect nearly every frame. An
+intent extra named `HIVE_FOLDS`, `GOGC` or `GOMEMLIMIT` is passed into the
+program's environment — those three and nothing else, since any app can send an
+intent — and `HIVE_INSPECT` lets `chrome://inspect` attach to the WebView:
+
+```
+adb shell am start -n hive.chat/dev.hive.app.MainActivity --es HIVE_FOLDS 1
+```
+
 **Nothing but Go is needed.** The manifest, the resource table, the archive and
 its signature are written by the build itself, the way the Windows resource
 object is ([15.6](#156-building-for-another-platform)): no Android SDK, and no

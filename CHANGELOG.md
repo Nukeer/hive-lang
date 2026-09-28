@@ -12,7 +12,7 @@
 * **A service's handler is now `proc(state: mut S, msg: M): M`.** It writes its state in place and answers with what it returns, so every request is answered, and the handler is an ordinary proc a test can call.
 * **`hive.syslink.spawnAddressed`** and **`hive.ui.windowAddressed`** start a handler that takes its own address third, `proc(mut S, M, hive.syslink.Address): M`, and is handed it every turn.
 * A handler whose state is not `mut`, whose answer is not one of its own messages, or whose state argument does not fit is refused where it is started.
-* **`hive.json.JsonValue`** — a document whose shape is not declared: a union of `String`, `Boolean`, `Int`, `Float`, `Array` and `Object`, whose codec reads and writes the JSON as it is. It is built, matched and compared like any declared type, and may be a field of one.
+* **`hive.json.JsonValue`** — a document whose shape is not declared: a union of `String`, `Boolean`, `Int`, `Float`, `Array` and `Object`, whose codec reads and writes the JSON as it is. It is built, matched and compared like any declared type, and may be a field of one. An `Object` holds its properties as a `hive.map.Map<Str, JsonValue>` in document order, so `hive.map.get(properties, "name")` reads one, and a key written twice keeps its place and its last value.
 
 ### Performance
 
@@ -23,6 +23,7 @@
 
 * **A vector handed to a mutex parameter loses what was proved about its length**, where `shrink(v)` inside `if v bounds 0` left `v[0]` compiling and failing at run time.
 * **A library type the library does not have is refused**, where `hive.net.Nonesuch` compiled and the Go toolchain reported it undefined.
+* **`sort` with nothing to order by is refused.** A vector of maps, addresses or function values — or of a type holding one — compiled and panicked when it ran; it now asks for the `func` that says which of two comes first.
 * A `mut` value handed to a function value's ordinary parameter is copied, as a direct call copies it.
 
 ### Breaking

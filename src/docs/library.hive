@@ -50,8 +50,13 @@ func index(): Str {
 
 		Each module owns its types under its own namespace: ~BT~hive.net.HttpRequest~BT~,
 		~BT~hive.json.JsonError~BT~, ~BT~hive.map.Map~BT~, ~BT~hive.syslink.Address~BT~. The only
-		builtin types that live directly on ~BT~hive~BT~ are the three the language uses
+		builtin types that live directly on ~BT~hive~BT~ are the two the language uses
 		without a module: ~BT~Result~BT~ and ~BT~Table~BT~.
+
+		**A library call is held to its signature** — how many arguments, and what each
+		is — and a type or an enumeration variant the module does not have
+		(~BT~hive.net.Nonesuch~BT~, ~BT~hive.ui.TextSize.Small()~BT~) is a compile error rather
+		than something the Go toolchain reports later.
 
 		**A module you don't use is not in your build.** Every module but two is
 		written against the target's standard library alone, so HTTP, WebSockets, TCP,
@@ -223,11 +228,13 @@ func maps(): Str {
 		* **A map is a value**, and so is what comes out of it: ~BT~keys~BT~ and ~BT~values~BT~ are
 		  fresh vectors.
 		* **~BT~==~BT~ compares the pairs** and ignores the order they were set in. There is
-		  no ordering *between* maps, so ~BT~sort~BT~ on a vector of them is a compile error.
+		  no ordering *between* maps, so ~BT~sort~BT~ on a vector of them — or of a type
+		  holding one — is a compile error.
 		* **A map does not travel and does not encode.** ~BT~encode~BT~ refuses one
 		  and so does a [~BT~hive.syslink~BT~](syslink.md) mailbox: decoding there is by
 		  declared shape, while a map's keys are whatever was put in it. Send its pairs
-		  as a vector of a type declared for them.
+		  as a vector of a type declared for them. The one exception is a
+		  [~BT~JsonValue~BT~](json.md) object's properties, whose codec is the document itself.
 
 		~BT~import hive.map~BT~ names the module ~BT~map~BT~, which **coexists with the
 		~BT~map(v, f)~BT~ builtin**: a call on the name is the module and a bare call is the
@@ -709,7 +716,8 @@ func json(): Str {
 		* ~BT~encode~BT~ derives the encoder from the **static** type and therefore cannot
 		  fail — it answers with a ~BT~Str~BT~, not a ~BT~Result~BT~.
 		* **A map does not encode.** Its keys are whatever was put in it, while decoding
-		  here is by declared shape. Send its pairs as a vector of a type declared for them.
+		  here is by declared shape. Send its pairs as a vector of a type declared for them
+		  — or hold the document as a ~BT~JsonValue~BT~, below, whose objects are maps.
 		* **Nor does a ~BT~Table~BT~**, anywhere in a value: it is rows of cells with nothing
 		  to name them. ~BT~Table.decode~BT~ does not exist.
 
@@ -724,12 +732,7 @@ func json(): Str {
 			Int \{ value: Int }
 			Float \{ value: Float }
 			Array \{ values: JsonValue[dyn] }
-			Object \{ properties: KV[dyn] }
-		}
-
-		type KV \{
-			key: Str
-			value: JsonValue
+			Object \{ properties: hive.map.Map<Str, JsonValue> }
 		}
 		~CODE~
 
@@ -739,8 +742,11 @@ func json(): Str {
 		~CODE~hive
 		if hive.json.JsonValue.decode(config, hive.json.codec()) is Result.Ok(doc) \{
 			if doc is hive.json.JsonValue.Object(properties) \{
-				for each p in properties \{
-					echo p.key
+				for each key in hive.map.keys(properties) \{
+					echo key
+				}
+				if hive.map.get(properties, "name") is Result.Ok(name) \{
+					echo name
 				}
 			}
 		}
@@ -748,7 +754,10 @@ func json(): Str {
 
 		* A number is an ~BT~Int~BT~ where it reads as one and a ~BT~Float~BT~ otherwise, so
 		  ~BT~1.0~BT~ stays a ~BT~Float~BT~ both ways.
-		* An object keeps its members in order, a repeated key included.
+		* An object's properties are a [map](map.md), in the order the document wrote
+		  them. A key written twice keeps its first place and its last value.
+		* Holding a map, a ~BT~JsonValue~BT~ has no order: ~BT~sort~BT~ over them takes the
+		  ~BT~func~BT~ that says which comes first.
 		* **No variant is ~BT~null~BT~**, so a document holding one is an error at that path.
 		* It is read whole: the document says which variant it is, so
 		  ~BT~JsonValue.String.decode~BT~ is refused.
@@ -1531,6 +1540,10 @@ func syslinkNodes(): Str {
 		}
 		echo "this node is \{hive.syslink.node()}"
 		~CODE~
+
+		**~BT~listen~BT~ answers with the endpoint a peer should dial.** A port of ~BT~0~BT~ asks the
+		kernel to choose, and what comes back — and what ~BT~node()~BT~ says from then on —
+		carries the port it chose. The host is left as written.
 
 		**A node has no name.** It is identified by the endpoint it can be dialled at,
 		so a peer list is ordinary runtime data rather than a cluster configuration.
