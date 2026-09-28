@@ -340,6 +340,7 @@ type JsonValue {
 	Float { value: Float }
 	Array { values: JsonValue[dyn] }
 	Object { properties: hive.map.Map<Str, JsonValue> }
+	Null
 }
 ```
 
@@ -353,7 +354,7 @@ type JsonValue {
   twice keeps its first place and its last value.
 * An object holds a map, so a `JsonValue` has **no order** and `sort` over them
   needs the `func` that says which comes first.
-* **No variant is `null`**, so a `null` anywhere is an error at its path.
+* `null` is `Null()`, wherever the document holds one.
 * `hive.json.JsonValue.<Variant>.decode` is refused: a document says which
   variant it is.
 * A field may be a `JsonValue`, which leaves that part of a declared shape

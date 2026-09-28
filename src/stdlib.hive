@@ -264,6 +264,7 @@ func declarationsOf(module: Str): Str {
 				Float \{ value: Float }
 				Array \{ values: JsonValue[dyn] }
 				Object \{ properties: hive.map.Map<Str, JsonValue> }
+				Null
 			}
 		`
 	}

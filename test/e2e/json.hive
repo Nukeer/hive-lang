@@ -152,8 +152,10 @@ proc main(): void {
 	if hive.json.JsonValue.decode("\{\"a\":1,\"b\":2,\"a\":3}", hive.json.codec()) is Result.Ok(twice) {
 		echo encode(twice, hive.json.codec())
 	}
-	// No variant is null, so a document holding one is refused where it holds it.
-	if hive.json.JsonValue.decode("[1,null]", hive.json.codec()) is Result.Error(why) {
-		echo "{why.path}: found {why.found}"
+	if hive.json.JsonValue.decode("[1,null]", hive.json.codec()) is Result.Ok(nulls) {
+		echo encode(nulls, hive.json.codec())
+		if nulls is hive.json.JsonValue.Array(values) && values bounds 1 {
+			echo values[1] == hive.json.JsonValue.Null()
+		}
 	}
 }

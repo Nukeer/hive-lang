@@ -23,4 +23,5 @@ name is ada
 {"kind":"count","body":{"n":3}}
 true
 {"a":3,"b":2}
-$[1]: found null
+[1,null]
+true

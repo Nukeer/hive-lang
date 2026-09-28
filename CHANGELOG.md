@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.10
+
+### Standard library
+
+* **`hive.json.JsonValue.Null`** — a document's `null`, read and written as one, where a `null` anywhere in a `JsonValue` was an error at its path.
+
 ## v0.2.9
 
 ### Language
