@@ -48,10 +48,8 @@ proc tab(port: Str, page: Str): Str {
 
 func stringAt(v: hive.json.JsonValue, key: Str): Str {
 	if v is hive.json.JsonValue.Object(properties) {
-		for each p in properties {
-			if p.key == key && p.value is hive.json.JsonValue.String(s) {
-				return s
-			}
+		if hive.map.get(properties, key) is Result.Ok(value) && value is hive.json.JsonValue.String(s) {
+			return s
 		}
 	}
 	return ""
