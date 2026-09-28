@@ -16,6 +16,8 @@ a file nobody wrote. Where a position's type is the program's own business — a
 map's key, a service's message, a query's rows — nothing is claimed about *that*
 type, but the count still stands. One of a module's own types is built by naming
 its fields, so it is held to those and a named argument may come in any order.
+A library type written down has to be one the module has: `hive.syslink.Nonesuch`
+is a compile error wherever a type is written.
 
 **A module you don't use is not in your build**
 ([12](12-modules.md#127-what-is-linked)). Every module but two is written against
@@ -89,8 +91,8 @@ A dictionary: keys paired with values, looked up by key. Type-level rules are in
   ordering *between* maps, so `sort` on a vector of them is a compile error.
 * **A map does not travel and does not encode.** `encode` refuses one
   and so does a `hive.syslink` mailbox: decoding here is by declared shape, while
-  a map's keys are whatever was put in it. Send `toTable(m)` and rebuild it with
-  `fromTable` on the other side.
+  a map's keys are whatever was put in it. Send its pairs as a vector of a type
+  declared for them.
 * `import hive.map` names the module `map`, which **coexists with the
   `map(v, f)` builtin**: a call on the name is the module and a bare call is the
   builtin. Nothing has to choose, because the two are told apart by shape.
@@ -323,23 +325,42 @@ type User {
 }
 ```
 
-Neither reaches the two readers below, which read a document rather than decoding
-a declared shape — and which are what this module is left holding, being the
-calls that need no type at all.
+**A document whose shape is not declared** is a `hive.json.JsonValue`, which the
+module declares as an ordinary union — built, matched, compared and sorted like
+one of the program's own:
 
-* `flatten(text)` takes **any** document and answers with a two-column `Table` of
-  `[path, value]`, one row per leaf, paths dotted and array elements indexed:
-  `{"keys":{"layout":"us"}}` becomes the row `["keys.layout", "us"]`. It is a
-  lookup structure for a document whose shape you do not want to declare.
-* `get(table, "keys.layout")` reads one path out of a flattened table.
-* `table(text)` is narrower and answers with a **headered** `Table` of the kind
-  `hive.file.csv` produces: the document must be an array of flat objects, row 0
-  is the keys of the first, and each later row is one object's values. An element
-  that is not a flat object, or one whose keys do not match the header, is an
-  error.
+```hive
+type JsonValue {
+	String { value: Str }
+	Boolean { value: Bool }
+	Int { value: Int }
+	Float { value: Float }
+	Array { values: JsonValue[dyn] }
+	Object { properties: KV[dyn] }
+}
 
-So `flatten` reshapes anything into rows you look up by path, while `table` reads
-one particular shape — a list of records — as a spreadsheet.
+type KV {
+	key: Str
+	value: JsonValue
+}
+```
+
+* Its codec is **the document itself**: `String("x")` is `"x"`, never
+  `{"String":{"value":"x"}}`. `hive.json.JsonValue.decode(text, codec)` reads any
+  document, and `encode` writes one back.
+* A number is an `Int` where it reads as one, and a `Float` otherwise; a `Float`
+  is written with a `.0` or an exponent, so a round trip keeps which it was.
+* An object keeps its members in document order, a repeated key included.
+* **No variant is `null`**, so a `null` anywhere is an error at its path.
+* `hive.json.JsonValue.<Variant>.decode` is refused: a document says which
+  variant it is.
+* A field may be a `JsonValue`, which leaves that part of a declared shape
+  undeclared.
+
+**A `Table` has no JSON.** It is rows of cells with nothing to name them, so
+`encode`, `T.decode` and a message crossing [`hive.syslink`](#1410-hivesyslink)
+refuse one wherever it sits in the value — `Str[dyn][dyn]` being the same type —
+and `Table.decode` does not exist.
 
 ## 14.8 `hive.crypto`
 
@@ -446,10 +467,24 @@ Addressable **services**, in this process or on another machine, reached by the
 same statement either way. A service is long-lived, owns private state only it
 can touch, and has an identity you can pass around.
 
-**The handler is a fold over the mailbox** —
-`proc (State, Message, hive.syslink.Envelope): State`. The compiler enforces that
-the state going in and coming out are the same type. There is no mutex and no
-`mut` anywhere: the fold *is* the mutex.
+**The handler is one turn** — `proc (state: mut State, message: Message): Message`.
+It writes its state in place and **returns the answer**. The state is a mutex
+parameter only the service's own mailbox ever holds, one message at a time, so
+nothing needs a lock. Because it is an ordinary `proc`, a handler can also be
+called directly — from a test, say — with a `mut` variable of your own.
+
+```hive
+proc counter(total: mut Int, op: Op): Op {
+	if op is Op.Add(n) {
+		total += n
+	}
+	return Op.Total(total)
+}
+```
+
+The compiler holds a handler to that shape where the service is started: the
+first parameter takes the mutex, the second is the mailbox type, the return type
+is the mailbox type too, and the starting state fits the first parameter.
 
 **An address is called.** There is exactly one way to reach a service, and — as
 with a func — the call site decides what it means:
@@ -466,13 +501,16 @@ The reply type **is the mailbox type**, so nothing is annotated: a service answe
 with one of its own messages, which makes a mailbox type the whole protocol.
 
 * `spawn(handler, state)` starts a service and returns its address.
+* `spawnAddressed(handler, state)` starts one whose handler is also handed its own
+  address every turn — `proc (mut State, Message, hive.syslink.Address): Message` —
+  to register itself or give to work it starts.
 * `register(name, address)` publishes it under an atom → `"Taken"` if in use.
 * `at(name)` is that service on this node; `on(endpoint, name)` the same service
   on another. Both perform **no I/O and cannot fail** — they are address
   construction, not a lookup.
-* `stop(address)`, `answer(from, value)`, `self(from)`,
-  `monitor(from, target, message)`.
-* `listen(endpoint)`, `node()`, `peers()`.
+* `monitor(watcher, target, notice)` posts `notice` to `watcher` — a service on
+  this node — when `target` dies; an already-dead target reports at once.
+* `stop(address)`, `listen(endpoint)`, `node()`, `peers()`.
 
 **`listen` answers with the endpoint a peer should dial**, which is not always the
 one it was given: a port of `0` asks the kernel to choose, and what comes back —
@@ -487,14 +525,13 @@ registry, and a named address is the only kind that **survives its service being
 restarted**. A **node has no name**: it is identified by the endpoint it can be
 dialed at, so a peer list is ordinary runtime data.
 
-**A crash is local to its service.** A `panic` inside a service body kills only
-that service; its monitors are told, its callers stop waiting, and the node keeps
-running. This is the one place `panic` does not stop the program.
+**Every request is answered** with what its turn returned, and a caller on this
+node is handed its own copy, since the next turn may write the state the answer
+was read from. A cast (`async inbox(m)`) discards the answer.
 
-**Forgetting to answer fails fast.** A request a service handles without
-answering comes straight back as `"NoReply"` — unless the envelope escaped the
-turn, in which case a reply may genuinely still be on its way and the runtime
-keeps waiting. That is what makes a deferred reply possible.
+**A crash is local to its service.** A `panic` inside a service body kills only
+that service; its monitors are told, its callers get `"Down"`, and the node keeps
+running. This is the one place `panic` does not stop the program.
 
 **On the wire.** One persistent, multiplexed connection per node *pair*, carrying
 length-prefixed frames, dialed lazily. Messages cross as JSON using the same
@@ -587,6 +624,8 @@ A **view is a value** — a tree of widgets — and what paints it is decided
 somewhere else:
 
 * `window(title, view, update, state)` opens a window and does not return.
+  `windowAddressed` is the same, with an `update` that is also handed the
+  window's own address.
 * `html(view)` renders the same tree as an HTML fragment, and `page(title, view)`
   as a whole document — which is what an `httpServe` handler answers with.
 
@@ -609,10 +648,11 @@ image, so there is one place to put it.
 On Windows a **built** windowed program also carries no console, so what opens is
 the window and nothing else.
 
-**The window is a service.** `update` is the same fold a `hive.syslink.spawn`
-handler is, and is checked as one, so a window has an address, needs no mutex,
+**The window is a service.** `update` is a `hive.syslink.spawn` handler —
+`proc (mut State, Msg): Msg` — and is checked as one, so a window has an address
 and can be posted to by a background task or by another machine. That is why the
-module needs no notion of a *command*.
+module needs no notion of a *command*. What `update` returns answers a request
+from another node, and is discarded for an event of the window's own.
 
 **The view is a `func`, and that is not a formality.** A func cannot hold a
 mutex, so drawing cannot write the model or anything else the caller can see —
@@ -1121,25 +1161,25 @@ unshadowed.
 not the time since the last frame the window drew.** The two are the same whenever
 a program can keep up and they are deliberately not the same when it cannot. A
 window holds at most one frame in flight: having reported one it says nothing more
-until the program has folded it, and while it waits the gap goes on growing, so the
+until the program has handled it, and while it waits the gap goes on growing, so the
 frame that does go carries the whole of the time that passed. A program that can
-fold sixty frames a second is therefore told about sixty of them; one that can
+handle sixty frames a second is therefore told about sixty of them; one that can
 manage twenty is told about twenty, of fifty milliseconds each, rather than sixty
 of seventeen.
 
 **A frame is reported before the window draws it, not after.** The picture a
-window is about to paint was described by the fold before this one, so nothing is
+window is about to paint was described by the turn before this one, so nothing is
 gained by holding the report back until it is painted, and something is lost: the
 program would sit idle for the length of a render and its answer would then reach a
-window already busy with the next one. Reported first, the fold and the drawing of
+window already busy with the next one. Reported first, the turn and the drawing of
 the previous world happen at the same time, in the two processes that each already
 own one of them. This is not observable in what a program is told — the gap is
 measured between the frames it was told about either way — but it is the difference
-between a fold that overlaps the picture and one that queues behind it.
+between a turn that overlaps the picture and one that queues behind it.
 
 This is what makes `onFrame` a clock. Were it otherwise — one message per refresh
 regardless — a program too slow for the window would be handed more frames than it
-could take, and since nothing between the window and the fold ever drops a message,
+could take, and since nothing between the window and its handler ever drops a message,
 the excess would queue rather than vanish: input would sit behind a growing backlog
 of stale frames, and a world stepped by the gaps in them would run slower than real
 time for as long as the backlog lasted. A gap longer than a tenth of a second is

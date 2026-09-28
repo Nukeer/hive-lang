@@ -16,3 +16,9 @@ untagged: ada at 0
 untagged closed at 7
 untagged wants the payload: $.opened_by expected a value
 ada Ada
+{"name":"ada","tags":["x",1,2.5,true],"ratio":1.0}
+tags holds 4
+ratio is a Float
+{"kind":"count","body":{"n":3}}
+true
+$[1]: found null

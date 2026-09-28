@@ -2296,8 +2296,8 @@ func jsonSource(): Str {
 			return "an object"
 		}
 		`,
-		// JsonParse backs every decode and hive.json.flatten; the decoder
-		// argument is what the call named, derived at compile time.
+		// JsonParse backs every decode; the decoder argument is what the call
+		// named, derived at compile time.
 		`
 		func JsonParse[T any](text string, dec func(JsonValue, string) (T, *JsonJsonError)) Result[T, JsonJsonError] \{
 			d := json.NewDecoder(strings.NewReader(text))
@@ -2420,102 +2420,13 @@ func jsonSource(): Str {
 			return JsonVec(v, path, elem)
 		}
 		`,
-		// JsonFlatten turns any JSON subtree into a Table of [path, value] rows —
-		// the type-safe holder for JSON that isn't modelled statically.
 		`
-		func JsonFlatten(v JsonValue, path string) (Table, *JsonJsonError) \{
-			table := Table\{}
-			flattenJson(v, "", &table)
-			return table, nil
-		}
-
-		func flattenJson(v JsonValue, prefix string, table *Table) \{
-			switch v.Kind \{
-			case 'o':
-				for _, m := range v.Obj \{
-					key := m.Key
-					if prefix != "" \{
-						key = prefix + "." + key
-					}
-					flattenJson(m.Value, key, table)
-				}
-			case 'a':
-				for i, item := range v.Arr \{
-					flattenJson(item, prefix+"["+strconv.Itoa(i)+"]", table)
-				}
-			default:
-				*table = append(*table, []string\{prefix, jsonLeafStr(v)})
+		func JsonWhole(v JsonValue) (int, bool) \{
+			if v.Kind != '#' \{
+				return 0, false
 			}
-		}
-
-		func jsonLeafStr(v JsonValue) string \{
-			switch v.Kind \{
-			case 's':
-				return v.Str
-			case '#':
-				return v.Num
-			case 'b':
-				return strconv.FormatBool(v.Bool)
-			}
-			return "null"
-		}
-		`,
-		// JsonGet looks a path up in a flattened Table.
-		`
-		func JsonGet(t Table, path string) Result[string, JsonJsonError] \{
-			for _, row := range t \{
-				if len(row) >= 2 && row[0] == path \{
-					return Ok[string, JsonJsonError](row[1])
-				}
-			}
-			return Err[string, JsonJsonError](JsonJsonError\{Path: path, Expected: "a value", Found: "nothing"})
-		}
-		`,
-		// JsonTable reads a JSON array of flat objects as a headered Table (the same
-		// shape a CSV read produces). Every object must carry the same keys
-		// as the first one, and every value must be a leaf.
-		`
-		func JsonTable(text string) Result[Table, JsonJsonError] \{
-			d := json.NewDecoder(strings.NewReader(text))
-			d.UseNumber()
-			v, err := parseJsonValue(d)
-			if err != nil \{
-				return Err[Table, JsonJsonError](JsonJsonError\{Path: "$", Expected: "valid JSON", Found: err.Error()})
-			}
-			if v.Kind != 'a' \{
-				return Err[Table, JsonJsonError](JsonJsonError\{Path: "$", Expected: "an array of objects", Found: jsonKindName(v)})
-			}
-			table := Table\{}
-			for i, item := range v.Arr \{
-				path := "$[" + strconv.Itoa(i) + "]"
-				if item.Kind != 'o' \{
-					return Err[Table, JsonJsonError](JsonJsonError\{Path: path, Expected: "a flat object", Found: jsonKindName(item)})
-				}
-				if i == 0 \{
-					header := []string\{}
-					for _, m := range item.Obj \{
-						header = append(header, m.Key)
-					}
-					table = append(table, header)
-				}
-				header := table[0]
-				if len(item.Obj) != len(header) \{
-					return Err[Table, JsonJsonError](JsonJsonError\{Path: path, Expected: "an object with keys " + strings.Join(header, ", "), Found: "an object with " + strconv.Itoa(len(item.Obj)) + " keys"})
-				}
-				row := []string\{}
-				for _, key := range header \{
-					cell, jerr := JsonField(item.Obj, key, path)
-					if jerr != nil \{
-						return Err[Table, JsonJsonError](*jerr)
-					}
-					if cell.Kind == 'a' || cell.Kind == 'o' \{
-						return Err[Table, JsonJsonError](JsonJsonError\{Path: path + "." + key, Expected: "a leaf value", Found: jsonKindName(cell)})
-					}
-					row = append(row, jsonLeafStr(cell))
-				}
-				table = append(table, row)
-			}
-			return Ok[Table, JsonJsonError](table)
+			i, err := strconv.Atoi(v.Num)
+			return i, err == nil
 		}
 
 		func JsonEncodeStr(s string) string \{
@@ -2545,128 +2456,31 @@ func jsonSource(): Str {
 			b.WriteByte(']')
 			return b.String()
 		}
-
-		type jsonTree struct \{
-			leaf  bool
-			value string
-			isArr bool
-			keys  []string
-			kids  map[string]*jsonTree
-			items map[int]*jsonTree
-			max   int
-		}
-
-		func newJsonTree() *jsonTree \{
-			return &jsonTree\{kids: map[string]*jsonTree\{}, items: map[int]*jsonTree\{}, max: -1}
-		}
 		`,
-		// JsonEncodeTable re-nests a Table of [path, value] rows into JSON (the
-		// inverse of JsonFlatten).
+		// A Float always reads back as one: `1.0`, never `1`.
 		`
-		func JsonEncodeTable(t Table) string \{
-			root := newJsonTree()
-			for _, row := range t \{
-				if len(row) >= 2 \{
-					insertJsonPath(root, row[0], row[1])
-				}
+		func JsonEncodeFraction(f float64) string \{
+			s := JsonEncodeFloat(f)
+			if strings.ContainsAny(s, ".eEnN") \{
+				return s
 			}
-			return encodeJsonTree(root)
+			return s + ".0"
 		}
 
-		func insertJsonPath(node *jsonTree, path string, value string) \{
-			if path == "" \{
-				node.leaf = true
-				node.value = value
-				return
-			}
-			seg, idx, isIdx, rest := splitJsonPath(path)
-			if isIdx \{
-				node.isArr = true
-				child, ok := node.items[idx]
-				if !ok \{
-					child = newJsonTree()
-					node.items[idx] = child
-					if idx > node.max \{
-						node.max = idx
-					}
-				}
-				insertJsonPath(child, rest, value)
-				return
-			}
-			child, ok := node.kids[seg]
-			if !ok \{
-				child = newJsonTree()
-				node.kids[seg] = child
-				node.keys = append(node.keys, seg)
-			}
-			insertJsonPath(child, rest, value)
-		}
-
-		func splitJsonPath(path string) (string, int, bool, string) \{
-			if strings.HasPrefix(path, "[") \{
-				end := strings.IndexByte(path, ']')
-				if end < 0 \{
-					return path, 0, false, ""
-				}
-				idx, _ := strconv.Atoi(path[1:end])
-				rest := strings.TrimPrefix(path[end+1:], ".")
-				return "", idx, true, rest
-			}
-			for i := 0; i < len(path); i++ \{
-				if path[i] == '.' \{
-					return path[:i], 0, false, path[i+1:]
-				}
-				if path[i] == '[' \{
-					return path[:i], 0, false, path[i:]
-				}
-			}
-			return path, 0, false, ""
-		}
-
-		func encodeJsonTree(node *jsonTree) string \{
-			if node.leaf \{
-				return jsonLeafEncode(node.value)
-			}
+		func JsonEncodeMembers[T any](items []T, member func(T) (string, string)) string \{
 			var b strings.Builder
-			if node.isArr \{
-				b.WriteByte('[')
-				for i := 0; i <= node.max; i++ \{
-					if i > 0 \{
-						b.WriteByte(',')
-					}
-					if child, ok := node.items[i]; ok \{
-						b.WriteString(encodeJsonTree(child))
-					} else \{
-						b.WriteString("null")
-					}
-				}
-				b.WriteByte(']')
-				return b.String()
-			}
 			b.WriteByte('\{')
-			for i, key := range node.keys \{
+			for i, item := range items \{
 				if i > 0 \{
 					b.WriteByte(',')
 				}
+				key, value := member(item)
 				b.WriteString(JsonEncodeStr(key))
 				b.WriteByte(':')
-				b.WriteString(encodeJsonTree(node.kids[key]))
+				b.WriteString(value)
 			}
 			b.WriteByte('}')
 			return b.String()
-		}
-		`,
-		// A leaf that reads as a JSON number/bool/null keeps its type on the way
-		// back out; everything else re-encodes as a string.
-		`
-		func jsonLeafEncode(value string) string \{
-			if value == "true" || value == "false" || value == "null" \{
-				return value
-			}
-			if _, err := strconv.ParseFloat(value, 64); err == nil \{
-				return value
-			}
-			return JsonEncodeStr(value)
 		}
 		`,
 		// JsonEncodeDynamic is the fallback when the compiler couldn't infer a
@@ -2684,8 +2498,6 @@ func jsonSource(): Str {
 				return JsonEncodeBool(x)
 			case Atom:
 				return JsonEncodeAtom(x)
-			case Table:
-				return JsonEncodeTable(x)
 			case []string:
 				return JsonEncodeVec(x, JsonEncodeStr)
 			}
@@ -5279,8 +5091,7 @@ func sqlSource(): Str {
 
 
 // The Go for `hive.syslink`: addressable services, in this process or on another
-// machine, reached by the same statement either way. A service is a fold over its
-// mailbox — the fold is the mutex — and the wire half is `syslinknet`.
+// machine, reached by the same statement either way. The wire half is `syslinknet`.
 func syslinkSource(): Str {
 	return join([
 		// ---------------------------------------------------------------------------
@@ -5463,36 +5274,17 @@ func syslinkSource(): Str {
 			return "<" + where + "#" + strconv.FormatUint(a.Id, 10) + ">"
 		}
 		`,
-		// SyslinkEnvelope is the turn's context: the reply token for a call, and the
-		// identity of the service handling it. Opaque in Hive — SyslinkAnswer,
-		// SyslinkSelf and SyslinkMonitor are what read it.
-		`
-		type SyslinkEnvelope struct \{
-			self   *mailbox
-			ref    uint64
-			origin string
-			drawn  bool
-		`,
-		// Set by SyslinkAnswer, read by the service loop once the turn returns. It is
-		// how the runtime can tell "this request was answered" from "this request was
-		// quietly forgotten" without the handler saying anything.
-		//
 		// ---------------------------------------------------------------------------
 		// Mailboxes
 		// ---------------------------------------------------------------------------
 		`
-			turn *turnState
+		type syslinkTurn struct \{
+			self  *mailbox
+			drawn bool
 		}
 
-		type turnState struct \{
-			answered atomic.Bool
-		}
-
-		func (e SyslinkEnvelope) String() string \{
-			if e.ref == 0 \{
-				return "<no reply expected>"
-			}
-			return "<reply " + strconv.FormatUint(e.ref, 10) + ">"
+		func (t syslinkTurn) address() SyslinkAddress \{
+			return SyslinkAddress\{Endpoint: SyslinkNode(), Name: t.self.name, Id: t.self.id, box: t.self}
 		}
 		`,
 		// delivery is one queued message. One that arrived over the wire keeps its raw
@@ -5700,41 +5492,50 @@ func syslinkSource(): Str {
 			})
 		}
 		`,
-		// SyslinkSpawn starts an anonymous service and returns its address without
-		// blocking. handler is the fold: state, one message and the turn's envelope in,
-		// next state out. There is no mutex anywhere — the fold is the mutex.
-		//
-		// repliesInTurn is decided by the compiler: true when the handler's envelope
-		// provably cannot outlive its turn, which is what makes an unanswered request
-		// safe to fail immediately.
-		//
-		// Whoever is waiting is waiting for nothing, and this is already known
-		// — so say so now instead of letting them sit out a timeout.
-		//
-		// A panic inside a service kills that service and nothing else: the
-		// node stays up and the failure reaches whoever is monitoring. That
-		// is what makes supervision meaningful.
-		//
-		// The request being handled when it crashed is one its caller is
-		// still waiting on.
 		`
 		func SyslinkSpawn[S any, M any](
-			handler func(S, M, SyslinkEnvelope) S,
+			handler func(*S, M) M,
 			initial S,
 			decode func([]byte) (any, error),
 			digest uint32,
-			repliesInTurn bool,
+			encode func(M) []byte,
+			clone func(M) M,
+		) SyslinkAddress \{
+			turn := func(state *S, msg M, _ syslinkTurn) M \{ return handler(state, msg) }
+			return spawnService(turn, initial, decode, digest, encode, clone)
+		}
+
+		func SyslinkSpawnAddressed[S any, M any](
+			handler func(*S, M, SyslinkAddress) M,
+			initial S,
+			decode func([]byte) (any, error),
+			digest uint32,
+			encode func(M) []byte,
+			clone func(M) M,
+		) SyslinkAddress \{
+			turn := func(state *S, msg M, t syslinkTurn) M \{ return handler(state, msg, t.address()) }
+			return spawnService(turn, initial, decode, digest, encode, clone)
+		}
+
+		func spawnService[S any, M any](
+			turn func(*S, M, syslinkTurn) M,
+			initial S,
+			decode func([]byte) (any, error),
+			digest uint32,
+			encode func(M) []byte,
+			clone func(M) M,
 		) SyslinkAddress \{
 			b := newMailbox(decode, digest)
-			go runService(b, handler, initial, repliesInTurn)
+			go runService(b, turn, initial, encode, clone)
 			return SyslinkAddress\{Name: atomNone, Id: b.id, box: b}
 		}
 
 		func runService[S any, M any](
 			b *mailbox,
-			handler func(S, M, SyslinkEnvelope) S,
+			turn func(*S, M, syslinkTurn) M,
 			initial S,
-			repliesInTurn bool,
+			encode func(M) []byte,
+			clone func(M) M,
 		) \{
 			state := initial
 			reason := "normal"
@@ -5755,48 +5556,45 @@ func syslinkSource(): Str {
 					failDelivery(d, "Decode", serviceLabel(b)+" does not handle messages of that type")
 					continue
 				}
-				turn := &turnState\{}
-				next, crashed := serviceTurn(handler, state, msg, SyslinkEnvelope\{self: b, ref: d.ref, origin: d.origin, drawn: d.drawn, turn: turn})
+				out, crashed := serviceTurn(turn, &state, msg, syslinkTurn\{self: b, drawn: d.drawn})
 				if crashed != nil \{
 					reason = Show(crashed)
 					fmt.Println("hive: " + serviceLabel(b) + " crashed: " + reason)
 					failDelivery(d, "Down", "the service crashed while handling the request: "+reason)
 					break
 				}
-				state = next
-		`,
-		// The turn is over and nothing answered. For a handler whose envelope
-		// cannot outlive its turn — which the compiler works out and passes in
-		// as repliesInTurn — no answer is coming, so the caller is told at once.
-		//
-		// Where the envelope can escape, a reply may still be on its way and
-		// this stays quiet.
-		`
-				if repliesInTurn && d.ref != 0 && !turn.answered.Load() \{
-					failDelivery(d, "NoReply",
-						serviceLabel(b)+" handled the message but never answered it")
-				}
+				replyTo(d, out, encode, clone)
 			}
 			b.die(reason)
 		}
-		`,
-		// serviceTurn runs one turn with the panic contained. On a crash the state is
-		// left untouched and the panic value is handed back as the death reason.
-		`
+
 		func serviceTurn[S any, M any](
-			handler func(S, M, SyslinkEnvelope) S,
-			state S,
+			turn func(*S, M, syslinkTurn) M,
+			state *S,
 			msg M,
-			env SyslinkEnvelope,
-		) (next S, crashed any) \{
-			next = state
+			t syslinkTurn,
+		) (out M, crashed any) \{
 			defer func() \{
 				if r := recover(); r != nil \{
 					crashed = r
 				}
 			}()
-			next = handler(state, msg, env)
-			return next, nil
+			return turn(state, msg, t), nil
+		}
+
+		func replyTo[M any](d delivery, out M, encode func(M) []byte, clone func(M) M) \{
+			if d.ref == 0 \{
+				return
+			}
+			if d.origin != "" \{
+				sendFrame(d.origin, frame\{kind: kindReply, ref: d.ref, payload: encode(out)})
+				return
+			}
+			if syslinkStrict() \{
+				deliverAnswer(d.ref, answer\{raw: encode(out)})
+				return
+			}
+			deliverAnswer(d.ref, answer\{value: clone(out)})
 		}
 
 		func serviceLabel(b *mailbox) string \{
@@ -6226,56 +6024,19 @@ func syslinkSource(): Str {
 			return out
 		}
 		`,
-		// SyslinkAnswer replies to a call. On a cast there is nothing waiting, so it is
-		// a no-op — the same message can be handled either way without the service
-		// caring which it was.
-		`
-		func SyslinkAnswer[V any](env SyslinkEnvelope, value V, encode func(V) []byte) \{
-			if env.ref == 0 \{
-				return
-			}
-			if env.turn != nil \{
-				env.turn.answered.Store(true)
-			}
-			if env.origin == "" \{
-				if syslinkStrict() \{
-					deliverAnswer(env.ref, answer\{raw: encode(value)})
-					return
-				}
-				deliverAnswer(env.ref, answer\{value: value})
-				return
-			}
-			sendFrame(env.origin, frame\{kind: kindReply, ref: env.ref, payload: encode(value)})
-		}
-		`,
-		// SyslinkSelf is the running service's own address, for handing to someone who
-		// should reply or report back later.
-		//
 		// ---------------------------------------------------------------------------
 		// Monitors
 		// ---------------------------------------------------------------------------
-		`
-		func SyslinkSelf(env SyslinkEnvelope) SyslinkAddress \{
-			if env.self == nil \{
-				return SyslinkAddress\{Name: atomNone, Id: 0}
-			}
-			return SyslinkAddress\{Endpoint: SyslinkNode(), Name: env.self.name, Id: env.self.id, box: env.self}
-		}
-		`,
-		// SyslinkMonitor asks to be told when target dies, by delivering a message the
-		// watcher chose itself — which is how a mailbox stays a single user type with
-		// no builtin envelope union polluting it. An already-dead target reports at
-		// once.
 		//
 		// The target's node holds the registration and reports the death. Keep a
 		// local record too, so losing the node fires the monitor even though the
 		// service itself never got the chance to.
 		`
-		func SyslinkMonitor[M any](env SyslinkEnvelope, target SyslinkAddress, msg M, encode func(M) []byte, digest uint32) \{
-			if env.self == nil \{
+		func SyslinkMonitor[M any](by SyslinkAddress, target SyslinkAddress, msg M, encode func(M) []byte, digest uint32) \{
+			me, ok := resolveLocal(by)
+			if !ok \{
 				return
 			}
-			me := env.self
 			if b, ok := resolveLocal(target); ok \{
 				b.mu.Lock()
 				if b.closed \{
@@ -9950,25 +9711,45 @@ func uiSource(): Str {
 			return nil, false
 		}
 		`,
-		// UiWindow opens a window showing view of the state, folds every event through
-		// update, and does not return.
-		//
-		// The fold is a syslink service, so the window has an address: anything else in
-		// the program — or on another node — can post to it with an ordinary send.
-		// That is what a command is here; there is no separate notion of one.
-		//
-		// Rendering is the only thing wrapped around the program's own handler, and
-		// it happens inside the fold — so the page a viewer sees is always some
-		// state the program actually passed through, never a mix of two.
+		// Rendering happens inside the turn, so a page never shows a mix of two states.
 		`
 		func UiWindow[S any, M any](
 			title string,
 			view func(S) UiView,
-			update func(S, M, SyslinkEnvelope) S,
+			update func(*S, M) M,
 			initial S,
 			decode func([]byte) (any, error),
 			digest uint32,
-			repliesInTurn bool,
+			encode func(M) []byte,
+			clone func(M) M,
+		) \{
+			turn := func(state *S, msg M, _ syslinkTurn) M \{ return update(state, msg) }
+			uiOpenWindow(title, view, turn, initial, decode, digest, encode, clone)
+		}
+
+		func UiWindowAddressed[S any, M any](
+			title string,
+			view func(S) UiView,
+			update func(*S, M, SyslinkAddress) M,
+			initial S,
+			decode func([]byte) (any, error),
+			digest uint32,
+			encode func(M) []byte,
+			clone func(M) M,
+		) \{
+			turn := func(state *S, msg M, t syslinkTurn) M \{ return update(state, msg, t.address()) }
+			uiOpenWindow(title, view, turn, initial, decode, digest, encode, clone)
+		}
+
+		func uiOpenWindow[S any, M any](
+			title string,
+			view func(S) UiView,
+			update func(*S, M, syslinkTurn) M,
+			initial S,
+			decode func([]byte) (any, error),
+			digest uint32,
+			encode func(M) []byte,
+			clone func(M) M,
 		) \{
 			w := &uiWindow\{
 				watchers: map[NetWsConnection]uint32\{},
@@ -9976,25 +9757,28 @@ func uiSource(): Str {
 				token:    CryptoRandomHex(16),
 			}
 			tally := uiFoldTally()
-			folded := func(state S, msg M, env SyslinkEnvelope) S \{
+			folded := func(state *S, msg M, t syslinkTurn) M \{
 				began := time.Now()
-				next := update(state, msg, env)
+				out := update(state, msg, t)
 				w.mu.Lock()
 				paced := w.paced
 				w.mu.Unlock()
-				if paced && !env.drawn \{
+				if paced && !t.drawn \{
 					tally.fold(began, time.Time\{}, time.Time\{})
-					return next
+					return out
 				}
 				viewed := time.Now()
-				v := view(next)
+				v := view(*state)
 				drawn := time.Now()
 				w.publish(v)
 				tally.fold(began, viewed, drawn)
-				return next
+				return out
 			}
-			addr := SyslinkSpawn(folded, initial, decode, digest, repliesInTurn)
+		`,
+		// Before the service starts, whose turns write the storage `initial` shares.
+		`
 			w.publish(view(initial))
+			addr := spawnService(folded, initial, decode, digest, encode, clone)
 
 			page := strings.NewReplacer(
 				"__TITLE__", uiEscape(title),

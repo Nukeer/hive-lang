@@ -121,8 +121,8 @@ test "storing a name again replaces its value" {
 	hive.syslink.stop(node)
 }
 
-// The receiving half of the gossip. `Invalidate` is a cast — nothing answers it
-// — so it goes out with `async`, and the `Lookup` after it does not race: one
+// The receiving half of the gossip. `Invalidate` is a cast — nothing waits for its
+// answer — so it goes out with `async`, and the `Lookup` after it does not race: one
 // mailbox handles its messages in the order they arrive, so by the time the
 // lookup is answered the drop has already happened.
 test "an invalidated name is dropped from this node" {
@@ -203,41 +203,35 @@ test "a store is not held up by a peer that is not there" {
 	hive.syslink.stop(node)
 }
 
-// Stored / Found / Missing are answers, and the handler's last branch returns
-// without answering them. Because that handler's envelope provably never leaves
-// the turn, the compiler lets syslink fail the caller the moment the turn ends:
-// `NoReply` comes back at once instead of the caller waiting out its two
-// seconds. This test is the one that would notice if that ever became a hang.
-test "an answer sent as a request is refused, not left hanging" {
+// Every turn answers, so an answer sent as a request is answered too: with itself.
+test "an answer sent as a request comes straight back" {
 	db := freshDb("no-reply")
 	Str[dyn] alone = []
 	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
 
-	mut Str reason = ""
+	mut Str echoed = ""
 	answer := node(cache.Cache.Stored("greeting")) with timeout 2000
-	if answer is Result.Error(err) {
-		reason = err.reason
+	if answer is Result.Ok(reply) && reply is cache.Cache.Stored(name) {
+		echoed = name
 	}
-	assert reason == "NoReply"
+	assert echoed == "greeting"
 
 	hive.syslink.stop(node)
 }
 
-// A store that the database refuses answers nothing, on purpose: the caller must
-// not be told a name was stored when it was not. The same `NoReply` carries that,
-// so a broken database is reported rather than swallowed.
+// The caller must not be told a name was stored when it was not.
 test "a store the database refuses is not reported as stored" {
 	db := freshDb("refused")
 	Str[dyn] alone = []
 	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
 	hive.sql.close(db)
 
-	mut Str reason = ""
+	mut Str refused = ""
 	stored := node(cache.Cache.Store("greeting", "from A")) with timeout 2000
-	if stored is Result.Error(err) {
-		reason = err.reason
+	if stored is Result.Ok(reply) && reply is cache.Cache.Refused(name) {
+		refused = name
 	}
-	assert reason == "NoReply"
+	assert refused == "greeting"
 
 	hive.syslink.stop(node)
 }
@@ -300,11 +294,9 @@ test "a peer that cannot be reached ends the search instead of hanging" {
 	hive.syslink.stop(node)
 }
 
-// A client is never told "stored" for something that was not. When the service
-// cannot answer — here because its database has been closed underneath it — the
-// front door turns that into a 500 that names the reason, and it does so at once
-// rather than after the two-second timeout.
-test "a cache that did not answer is a 500, not a 200" {
+// A client is never told "stored" for something that was not — here because the
+// database has been closed underneath the service.
+test "a store the cache refused is a 500, not a 200" {
 	db := freshDb("front-door-broken")
 	Str[dyn] alone = []
 	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
@@ -314,7 +306,7 @@ test "a cache that did not answer is a 500, not a 200" {
 
 	set := cache.handler(hive.net.HttpRequest("POST", "/set/greeting", [], "from A"), alone)
 	assert set.status == 500
-	assert set.body == "the cache did not answer: NoReply\n"
+	assert set.body == "the cache refused to store that\n"
 
 	hive.syslink.stop(node)
 }

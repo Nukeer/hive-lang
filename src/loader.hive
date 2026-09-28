@@ -332,9 +332,11 @@ proc flatten(sources: Source[], entryKey: Str, found: diag.Diagnostic[]): Progra
 		}
 	}
 
+	library := libraryModules(flatNames)
+	mut Str[dyn] used = []
 	mut ast.Decl[dyn] decls = []
 	for each src in prefixed {
-		mut Rw rw = Rw(src.key, hive.map.new(), hive.map.new(), flatNames, [], [])
+		mut Rw rw = Rw(src.key, hive.map.new(), hive.map.new(), flatNames, [], [], [])
 		bindImports(rw, src, known)
 		for each d in src.module.decls {
 			append(decls, rewriteDecl(rw, d))
@@ -342,8 +344,38 @@ proc flatten(sources: Source[], entryKey: Str, found: diag.Diagnostic[]): Progra
 		for each e in rw.errors {
 			append(errors, diag.inFile(src.key, e))
 		}
+		for each key in rw.library {
+			if indexOf(used, key) is Result.Error(_) {
+				append(used, key)
+			}
+		}
+	}
+	// Only what the program named, so a program that never names one builds as before.
+	for each src in library {
+		if indexOf(used, src.key) is Result.Ok(_) {
+			mut Rw rw = Rw(src.key, hive.map.new(), hive.map.new(), flatNames, [], [], [])
+			for each d in src.module.decls {
+				append(decls, rewriteDecl(rw, d))
+			}
+		}
 	}
 	return Program(ast.Module([], decls, foreignOf(prefixed)), prefixed, errors)
+}
+
+// Each name goes into `flatNames` under `hive.<module>#<Name>`.
+proc libraryModules(flatNames: mut hive.map.Map<Str, Str>): Source[dyn] {
+	mut Source[dyn] out = []
+	for each module in stdlib.declaringModules() {
+		key := "hive." + module
+		parsed := parser.parse(lexer.lex(stdlib.declarationsOf(module)).tokens)
+		for each d in parsed.module.decls {
+			name := ast.declName(d)
+			hive.map.set(flatNames, key + "#" + name, stdlib.flatName(module, name))
+		}
+		mut hive.map.Map<Str, Str> nothing = hive.map.new()
+		append(out, Source(key, "", "", nothing, parsed.module))
+	}
+	return out
 }
 
 // One module's rewriting context.
@@ -362,6 +394,8 @@ type Rw {
 	// declaration, so a name in here is left alone.
 	locals: Str[dyn]
 	errors: diag.Diagnostic[dyn]
+	// The `hive.<module>` keys whose declarations this module named.
+	library: Str[dyn]
 }
 
 proc bindImports(rw: mut Rw, src: Source, known: hive.map.Map<Str, Bool>): void {
@@ -409,6 +443,18 @@ func importedFlat(rw: Rw, alias: Str, member: Str): Str {
 		if hive.map.get(rw.flatNames, key + "#" + member) is Result.Ok(flat) {
 			return flat
 		}
+	}
+	return ""
+}
+
+// Also notes the module, so only what a program names is flattened in.
+proc libraryFlat(rw: mut Rw, module: Str, name: Str): Str {
+	key := "hive." + module
+	if hive.map.get(rw.flatNames, key + "#" + name) is Result.Ok(flat) {
+		if indexOf(rw.library, key) is Result.Error(_) {
+			append(rw.library, key)
+		}
+		return flat
 	}
 	return ""
 }
@@ -530,12 +576,12 @@ proc rewriteParams(rw: mut Rw, params: ast.Param[]): ast.Param[dyn] {
 // --- Types -------------------------------------------------------------------
 
 proc rewriteType(rw: mut Rw, t: ast.TypeExpr): ast.TypeExpr {
-	if t is ast.TypeExpr.Fn(pure, params, result) {
+	if t is ast.TypeExpr.Fn(pure, params, mutexes, result) {
 		mut ast.TypeExpr[dyn] out = []
 		for each param in params {
 			append(out, rewriteType(rw, param))
 		}
-		return ast.TypeExpr.Fn(pure, out, rewriteType(rw, result))
+		return ast.TypeExpr.Fn(pure, out, mutexes, rewriteType(rw, result))
 	}
 	if t is ast.TypeExpr.Named(pkg, name, args, dims) {
 		mut ast.TypeExpr[dyn] newArgs = []
@@ -558,6 +604,10 @@ proc namedType(rw: mut Rw, pkg: Str, name: Str, args: ast.TypeExpr[dyn], dims: a
 	// `hive.net.HttpRequest` and friends belong to the standard library, which
 	// is named in the program rather than flattened into it.
 	if pkg == "hive" || text.startsWith(pkg, "hive.") {
+		declared := libraryFlat(rw, stdlibModuleOf(pkg), name)
+		if declared != "" {
+			return ast.TypeExpr.Named("", declared, args, dims)
+		}
 		return ast.TypeExpr.Named(pkg, name, args, dims)
 	}
 	imported := importedFlat(rw, pkg, name)
@@ -566,6 +616,10 @@ proc namedType(rw: mut Rw, pkg: Str, name: Str, args: ast.TypeExpr[dyn], dims: a
 	}
 	// `ui.View` with `import hive.ui as ui` — the same type, spelled short.
 	if hive.map.get(rw.stdlibAliases, pkg) is Result.Ok(module) {
+		declared := libraryFlat(rw, module, name)
+		if declared != "" {
+			return ast.TypeExpr.Named("", declared, args, dims)
+		}
 		return ast.TypeExpr.Named("hive." + module, name, args, dims)
 	}
 	if hive.map.has(rw.aliasKeys, pkg) {
@@ -733,6 +787,10 @@ proc member(rw: mut Rw, subject: ast.Expr, field: Str): ast.Expr {
 				return ast.Expr.Ident(imported)
 			}
 			if hive.map.get(rw.stdlibAliases, alias) is Result.Ok(module) {
+				declared := libraryFlat(rw, module, field)
+				if declared != "" {
+					return ast.Expr.Ident(declared)
+				}
 				// `ui.row` and `hive.ui.row` are the same call. Written back out
 				// in full, so the emitter only ever sees the one spelling.
 				return ast.Expr.Member(ast.Expr.Member(ast.Expr.Ident("hive"), module), field)
@@ -740,6 +798,14 @@ proc member(rw: mut Rw, subject: ast.Expr, field: Str): ast.Expr {
 			if hive.map.has(rw.aliasKeys, alias) {
 				append(rw.errors, diag.at(0, "the module imported as `{alias}` has no `{field}`"))
 				return ast.Expr.Member(subject, field)
+			}
+		}
+	}
+	if subject is ast.Expr.Member(root, module) {
+		if root is ast.Expr.Ident(head) && head == "hive" {
+			declared := libraryFlat(rw, module, field)
+			if declared != "" {
+				return ast.Expr.Ident(declared)
 			}
 		}
 	}
@@ -805,7 +871,17 @@ proc rewritePatternPath(rw: mut Rw, path: Str[]): Str[dyn] {
 			return [imported, text.charAt(path, 2)]
 		}
 		if hive.map.get(rw.stdlibAliases, first) is Result.Ok(module) {
+			declared := libraryFlat(rw, module, typeName)
+			if declared != "" {
+				return [declared, text.charAt(path, 2)]
+			}
 			return ["hive", module, typeName, text.charAt(path, 2)]
+		}
+	}
+	if len(path) == 4 && first == "hive" {
+		declared := libraryFlat(rw, text.charAt(path, 1), text.charAt(path, 2))
+		if declared != "" {
+			return [declared, text.charAt(path, 3)]
 		}
 	}
 	return out

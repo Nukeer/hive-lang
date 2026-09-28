@@ -69,8 +69,8 @@ token, and the secret travels in the codec value.
 Its other half is `T.decode(text, codec)`, named on the type because a `Str`
 arriving from outside cannot say what it should become
 ([14.7](14-stdlib.md#147-hivejson)). What a format cannot carry — a
-`hive.map.Map`, whose keys are whatever was put in it — is refused where the
-encoder is derived.
+`hive.map.Map`, whose keys are whatever was put in it, or a `Table`, which has
+no names for its cells — is refused where the encoder is derived.
 
 ## A declaration of your own wins
 

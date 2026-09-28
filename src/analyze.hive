@@ -156,13 +156,15 @@ proc analyzeModule(m: ast.Module): Report {
 	}
 	loud := loopy(m.decls)
 	settled := steady(m.decls)
+	handsBack := emit.handingBackFuncs(t, m.decls)
 
 	mut Scored[dyn] scored = []
 	mut deepest := 0
 	for each d in m.decls {
 		if d is ast.Decl.CallableDecl(kind, name, params, _, body, line) {
-			mut Walk w = Walk(t, written, leaked, lent, loud, settled, [], [], 0)
-			at := At(infer.boundParams(infer.newEnv(t), params, 0), mutexes(params), 0, [], false)
+			env := infer.boundParams(infer.newEnv(t), params, 0)
+			mut Walk w = Walk(t, written, leaked, lent, loud, settled, [], [], 0, handsBack, emit.cellNames(t, env, params, body), "")
+			at := At(env, mutexes(params), 0, [], false)
 			walkBlock(w, at, body)
 			if w.deepest > deepest {
 				deepest = w.deepest
@@ -484,6 +486,9 @@ type Walk {
 	found: Finding[dyn]
 	calls: Str[dyn]
 	deepest: Int
+	handsBack: Str[dyn]
+	cells: Str[dyn]
+	handing: Str
 }
 
 // Where in a body the walk is. A value, so a block that ends restores it.
@@ -534,7 +539,11 @@ proc walkStmt(w: mut Walk, at: At, s: ast.Stmt): At {
 		return declared(at, name, ty, mutable)
 	}
 	if s is ast.Stmt.Assign(target, value) {
+		if emit.handsBack(at.env, w.handsBack, at.mutables, w.cells, target, value) {
+			w.handing = emit.pathOf(target)
+		}
 		walkExpr(w, at, value)
+		w.handing = ""
 		walkExpr(w, at, target)
 		growing(w, at, target, value)
 		return at
@@ -619,9 +628,14 @@ func starting(at: At, deferred: Bool): At {
 
 proc walkExpr(w: mut Walk, at: At, e: ast.Expr): void {
 	if e is ast.Expr.Call(callee, args) {
+		handing := w.handing
 		call(w, at, callee, args)
 		for each a in args {
+			if handing != "" && emit.handsOn(at.env, w.handsBack, a.value) {
+				w.handing = handing
+			}
 			walkExpr(w, at, a.value)
+			w.handing = ""
 		}
 		return
 	}
@@ -688,8 +702,34 @@ proc call(w: mut Walk, at: At, callee: ast.Expr, args: ast.Arg[]): void {
 		}
 		return
 	}
+	if infer.typeOf(at.env, callee) is types.Ty.TFn(_, params, mutexes, _) {
+		valueArguments(w, at, params, mutexes, args)
+		return
+	}
 	builtinCall(w, at, callee, args)
 	libraryCall(w, at, callee, args)
+}
+
+proc valueArguments(w: mut Walk, at: At, params: types.Ty[], mutexes: Bool[], args: ast.Arg[]): void {
+	mut i := 0
+	for each a in args {
+		ty := infer.typeAt(params, i)
+		mutex := types.mutexAt(mutexes, i)
+		i = i + 1
+		if mutex || mutableSource(at, a.value) == false || types.ownsStorage(w.table, ty) == false {
+			continue
+		}
+		weight := copyWeight(w.table, w.written, ty, [])
+		if weight == 0 {
+			continue
+		}
+		if at.spawning {
+			note(w, at, Kind.Message(shownType(ty), weight), sketch(a.value))
+		} else {
+			note(w, at, Kind.Copy(shownType(ty), "an argument to a function value", weight, whyCopied(w, ty)),
+				sketch(a.value))
+		}
+	}
 }
 
 // The declared callable being called, or `""`.
@@ -708,6 +748,8 @@ func calledName(t: types.Table, at: At, callee: ast.Expr): Str {
 // Every argument copied on the way in (8.1) — unless the callee is one of the
 // `func`s the emitter lends storage to, and unless a thread is starting.
 proc arguments(w: mut Walk, at: At, info: types.CallableInfo, args: ast.Arg[]): void {
+	handing := w.handing
+	w.handing = ""
 	mut Int open = 0
 	for each p in info.params {
 		found := ast.argFor(args, p.name, open)
@@ -717,7 +759,7 @@ proc arguments(w: mut Walk, at: At, info: types.CallableInfo, args: ast.Arg[]): 
 		if p.mutex {
 			continue
 		}
-		if mutableSource(at, found) == false {
+		if mutableSource(at, found) == false || (handing != "" && emit.pathOf(found) == handing) {
 			continue
 		}
 		ty := types.resolve(w.table, p.declared)
@@ -1259,6 +1301,15 @@ proc changingExpr(t: types.Table, e: ast.Expr, out: mut Str[dyn]): void {
 				}
 			} else if growsIt(name) {
 				put(out, emit.rootOf(argExpr(args, 0)))
+			} else if infer.isBuiltin(name) == false && types.findType(t, name) is Result.Error(_) {
+				// A function value this walk cannot type: any argument may be a mutex.
+				for each a in args {
+					put(out, emit.rootOf(a.value))
+				}
+			}
+		} else if callsFieldValue(t, callee) {
+			for each a in args {
+				put(out, emit.rootOf(a.value))
 			}
 		}
 		found := libraryOf(callee)
@@ -1369,6 +1420,19 @@ proc boundByPattern(p: ast.Pattern, out: mut Str[dyn]): void {
 }
 
 // The builtins that write through the vector they are given.
+func callsFieldValue(t: types.Table, callee: ast.Expr): Bool {
+	if len(libraryOf(callee)) > 0 {
+		return false
+	}
+	if callee is ast.Expr.Member(subject, _) {
+		if subject is ast.Expr.Ident(head) {
+			return types.findType(t, head) is Result.Error(_)
+		}
+		return true
+	}
+	return false
+}
+
 func growsIt(name: Str): Bool {
 	return name == "append" || name == "prepend" || name == "drop"
 		|| name == "sort" || name == "delete"

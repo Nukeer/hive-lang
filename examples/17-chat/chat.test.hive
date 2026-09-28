@@ -4,12 +4,9 @@
 //
 // There are three kinds here, and the third is the one worth having.
 //
-// The first is about the **model**. Everything the fold decides lives in an
-// ordinary `func` of a model — `met`, `parted`, `spoke` — so a test calls one
-// and looks at what came back. `update` itself cannot be called: an envelope is
-// opaque and only ever arrives as a handler's own argument, so there is no way
-// to build one. What is left uncovered is the dispatch, and that is the same
-// gap every service in the language has.
+// The first is about the **model**. `update` is an ordinary proc, so a test hands
+// it a model and a message and looks at what it did, and the same goes for the
+// funcs it is built from — `met`, `parted`, `spoke`.
 //
 // The second is about the **view**. A view is a value, so a test can render one
 // and read it: `ui.html` is the same renderer the window uses and it needs no
@@ -27,6 +24,23 @@ import hive.ui
 
 func alone(): chat.Model {
 	return chat.fresh("127.0.0.1:9100", "127.0.0.1:9101")
+}
+
+test "update writes the model it is handed and answers a knock with a wave" {
+	mut chat.Model model = alone()
+	window := hive.syslink.at(#Chat)
+	chat.update(model, chat.Msg.NameTyped("Ada"), window)
+	chat.update(model, chat.Msg.DraftTyped("hi"), window)
+	assert model.me == "Ada"
+	assert model.draft == "hi"
+
+	mut Str waved = ""
+	answer := chat.update(model, chat.Msg.Knock("127.0.0.1:9101", "Bob"), window)
+	if answer is chat.Msg.Wave(endpoint, who) {
+		waved = "{who} at {endpoint}"
+	}
+	assert waved == "Ada at 127.0.0.1:9100"
+	assert len(model.here) == 1
 }
 
 test "a fresh node is in the lobby, knows where it listens, and knows nobody" {
@@ -103,7 +117,7 @@ test "what somebody said lands in the transcript" {
 	}
 }
 
-test "folding leaves the model it was given alone" {
+test "the funcs update is built from leave the model they were given alone" {
 	model := alone()
 	after := chat.spoke(chat.met(model, "127.0.0.1:9101", "Bob", "09:30"), "Bob", "hi", "09:31")
 	assert len(after.transcript) == 2
@@ -220,34 +234,31 @@ type Heard {
 
 // A stand-in for the other node's window. It answers a knock the way the real
 // one does, and remembers everything else it was told.
-proc far(heard: Heard, msg: chat.Msg, from: hive.syslink.Envelope): Heard {
-	mut Heard next = heard
+proc far(heard: mut Heard, msg: chat.Msg): chat.Msg {
 	if msg is chat.Msg.Knock(endpoint, who) {
-		hive.syslink.answer(from, chat.Msg.Wave(heard.endpoint, heard.name))
-		append(next.lines, "knock {endpoint} {who}")
-		return next
+		append(heard.lines, "knock {endpoint} {who}")
+		return chat.Msg.Wave(heard.endpoint, heard.name)
 	}
 	if msg is chat.Msg.Spoke(who, text, at) {
-		append(next.lines, "spoke {who} {text} {at}")
-		return next
+		append(heard.lines, "spoke {who} {text} {at}")
+		return msg
 	}
 	if msg is chat.Msg.Parted(endpoint, who) {
-		append(next.lines, "parted {endpoint} {who}")
-		return next
+		append(heard.lines, "parted {endpoint} {who}")
+		return msg
 	}
 	// The two `greet` posts back to whatever window it was handed.
 	if msg is chat.Msg.Met(endpoint, who) {
-		append(next.lines, "met {endpoint} {who}")
-		return next
+		append(heard.lines, "met {endpoint} {who}")
+		return msg
 	}
 	if msg is chat.Msg.Unreachable(endpoint) {
-		append(next.lines, "unreachable {endpoint}")
-		return next
+		append(heard.lines, "unreachable {endpoint}")
+		return msg
 	}
 	// Anything else is a question about what has been heard so far, answered
 	// with the transcript joined into one line.
-	hive.syslink.answer(from, chat.Msg.Spoke("far", join(heard.lines, " | "), ""))
-	return next
+	return chat.Msg.Spoke("far", join(heard.lines, " | "), "")
 }
 
 proc asked(box: hive.syslink.Address): Str {
@@ -280,8 +291,8 @@ test "a greeting is a request, and the answer is what the other node is called" 
 	// The knock arrived, carrying who was knocking...
 	assert indexOf(told, "knock 127.0.0.1:9188 Ada") is Result.Ok(_)
 	// ...and the wave came back, carrying who answered. That round trip is the
-	// whole handshake: one waited call, one `answer`, and a `Met` posted to the
-	// window from off the fold's thread.
+	// whole handshake: one waited call, its answer, and a `Met` posted to the
+	// window from off its thread.
 	assert indexOf(told, "met 127.0.0.1:9188 Bob") is Result.Ok(_)
 }
 

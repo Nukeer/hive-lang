@@ -17,7 +17,8 @@ immutable view really is one: it cannot see the caller's later writes, whether
 the two run in sequence or, for an `async` call, at the same time.
 
 `mut` may not appear anywhere else a type can: not on a field, not on a return,
-not in a `proc(...)` type. Each of those binds nothing.
+not in a `func(...)` type. Each of those binds nothing. A `proc(...)` type may mark
+a parameter `mut`, which is a mutex parameter of whatever value it describes.
 
 A `mut` variable may not be named `UPPER_CASE`
 ([01](01-lexical.md#14-names-have-shapes)).
@@ -52,12 +53,23 @@ the call's result is kept makes no difference: `n := async count(v)` gets storag
 of its own too, and so does each call in an `await [...]` — one copy each, never
 one between them. What decides is the thread, not the name.
 
-A callable with a mutex parameter can be neither referenced (`f`) nor partially
-applied (`f(1, _)`): a function value has no call site to take a mutex from.
+**The same holds through a function value.** A callable with a mutex parameter
+may be referenced, stored, passed and partially applied
+([5.4](05-expressions.md#54-function-values)); its type says which positions take
+the mutex (`proc(mut Str[dyn], Str): void`), and a call through it is where the
+storage is handed over:
+
+```hive
+f := grow
+f(v, "d")             // waited for: v grows
+async f(v, "e")       // a thread of its own: it grows a copy
+g := grow(_, "f")     // a mutex position stays a hole — never captured
+```
 
 One consequence for the [bounds pass](10-bounds.md): a callee holding a mutex may
-rebind the vector to a shorter one, so passing a variable to a `mut` parameter
-costs it every length and index fact already proved about it.
+rebind the vector to a shorter one, so passing a variable to a `mut` parameter —
+by name or through a function value — costs it every length and index fact
+already proved about it.
 
 ## 8.3 What a value is
 

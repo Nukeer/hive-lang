@@ -371,8 +371,9 @@ func types(): Str {
 
 		Written like a declaration with the name dropped: ~BT~func(Int): Int~BT~,
 		~BT~proc(hive.net.HttpRequest): hive.net.HttpResponse~BT~. A ~BT~func~BT~ value may be used
-		where a ~BT~proc~BT~ is expected; a ~BT~proc~BT~ value may not fill a ~BT~func~BT~ slot. ~BT~mut~BT~ may
-		not appear in a function type.
+		where a ~BT~proc~BT~ is expected; a ~BT~proc~BT~ value may not fill a ~BT~func~BT~ slot. A ~BT~proc~BT~
+		type may mark a parameter ~BT~mut~BT~ — ~BT~proc(mut Str[dyn], Str): void~BT~ — and a ~BT~func~BT~
+		type may not. ~BT~proc(mut Int): void~BT~ and ~BT~proc(Int): void~BT~ are different types.
 
 		## Maps
 
@@ -707,9 +708,15 @@ func expressions(): Str {
 		so ~BT~Msg.Changed~BT~ on its own is a compile error and the hole is what makes one
 		a function value.
 
-		Three things cannot become values: a **generic** callable, a callable with a
-		**mutex parameter**, and a callable with a **statically-sized parameter** beyond
-		one immutable local binding it is called through.
+		A callable with a **mutex parameter** is a value like any other: ~BT~grow(_, "x")~BT~
+		is a ~BT~proc(mut Str[dyn]): void~BT~. A mutex position in a partial application
+		stays a hole, since what is supplied is captured by value. A call through a
+		function value is held to its type, arguments by position, with a ~BT~mut~BT~
+		variable wherever the type says ~BT~mut~BT~.
+
+		Two things cannot become values: a **generic** callable, and a callable with a
+		**statically-sized parameter** beyond one immutable local binding it is called
+		through.
 
 		## Member access, indexing, slicing
 
@@ -1016,7 +1023,8 @@ func mutability(): Str {
 		in — never the reverse.
 
 		~BT~mut~BT~ may not appear anywhere else a type can: **not on a field, not on a
-		return, not in a ~BT~proc(...)~BT~ type**. A ~BT~mut~BT~ variable may not be ~BT~UPPER_CASE~BT~.
+		return, not in a ~BT~func(...)~BT~ type** — a ~BT~proc(...)~BT~ type may mark a parameter
+		~BT~mut~BT~. A ~BT~mut~BT~ variable may not be ~BT~UPPER_CASE~BT~.
 
 		## Mutex parameters
 
@@ -1043,10 +1051,12 @@ func mutability(): Str {
 		A call you wait for *there* hands over the caller's storage; an ~BT~async~BT~ or
 		~BT~await~BT~ed one hands over a copy — a thread of its own gets storage of its own.
 
-		A callable with a mutex parameter can be neither referenced (~BT~f~BT~) nor partially
-		applied (~BT~f(1, _)~BT~): a function value has no call site to take a mutex from.
-		And passing a variable to a ~BT~mut~BT~ parameter costs it every length and index fact
-		[already proved](bounds.md) about it, since the callee may rebind it shorter.
+		The same holds through a function value: ~BT~f := grow~BT~ then ~BT~f(v, "d")~BT~ grows ~BT~v~BT~,
+		and ~BT~async f(v, "e")~BT~ grows a copy. A mutex position in a partial application
+		stays a hole — ~BT~grow(_, "f")~BT~ — since what is supplied is captured by value.
+		Passing a variable to a ~BT~mut~BT~ parameter, by name or through a value, costs it
+		every length and index fact [already proved](bounds.md) about it, since the callee
+		may rebind it shorter.
 
 		## What a value is
 
@@ -1217,7 +1227,7 @@ func concurrency(): Str {
 
 		No channel type, no mutex primitive, no thread handle, no cancellation token and
 		no scheduler to configure. A program that needs long-lived shared state reaches
-		for a [service](stdlib/syslink.md), whose handler is a fold over its mailbox and
+		for a [service](stdlib/syslink.md), whose handler takes one message at a time and
 		therefore needs no lock at all; a program that needs a result from work in
 		flight names it.
 
@@ -2220,7 +2230,7 @@ func pitfalls(): Str {
 		## Generics and values
 
 		**A generic callable cannot be used as a value**, and neither can one with a
-		mutex parameter or a statically-sized parameter it is handed on from.
+		statically-sized parameter it is handed on from.
 
 		**A type variable that appears only in the return type** cannot be inferred.
 

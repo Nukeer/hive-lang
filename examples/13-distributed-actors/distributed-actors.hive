@@ -17,20 +17,10 @@
 // messages, so the reply type is the mailbox type and nothing has to be
 // annotated.
 //
-// ANSWERING, AND FORGETTING TO
-// ----------------------------
-// A request that a service handles but never answers comes back immediately as
-// `NoReply` — it does not sit there until the caller's patience runs out.
-// Forgetting to reply on one branch is the easiest mistake to make in service
-// code, and a five-second timeout is a terrible way to be told about it.
-//
-// The compiler decides which services that applies to, and you write nothing
-// either way. If a handler's envelope only ever reaches `answer`, `self` or
-// `monitor`, it cannot outlive the turn it arrived in, so once the turn ends no
-// answer can possibly still be coming. If the envelope goes anywhere else —
-// stored in the state, handed to a call the handler does not wait for — a reply
-// may genuinely still be on its way, and the runtime keeps waiting instead. Both
-// cases are shown below: `inbox` is the first kind, `unhurried` the second.
+// ANSWERING
+// ---------
+// A handler writes its state in place and returns its answer, so every request
+// gets one. Nothing waiting for it means it is dropped.
 //
 // An address is an ordinary value, and that is what separates a service from a
 // call you did not wait for: a call has at most a result waiting to be read, while
@@ -63,69 +53,37 @@ type Note {
 	// Asking the inbox to watch another service. Addresses are ordinary values,
 	// so one travels inside a message like anything else.
 	Watch { peer: hive.syslink.Address }
-	// A death notice. The watcher picks this message itself, which is what keeps
-	// the mailbox a single user type with no builtin envelope union mixed in.
+	// A death notice, which the watcher picks itself.
 	PeerLost
-	// A request the inbox deliberately never answers.
-	Ignore
-	// An answer that arrives from a task rather than from a turn.
-	Late { text: Str }
 	// Asking the inbox to fall over, to show a crash stays local to it.
 	Explode
 }
 
-// A service handler is the fold over its mailbox: state in, one message, the
-// turn's envelope, and the next state out. There is no mutex anywhere and no
-// `mut` — the fold *is* the mutex, which is the whole payoff of the model.
-proc inbox(seen: Int, note: Note, from: hive.syslink.Envelope): Int {
+// A service handler takes the state to write and one message, and returns the
+// answer. Every branch returns, so a `Note` added without a branch here is a
+// compile error.
+proc inbox(seen: mut Int, note: Note): Note {
 	if note is Note.Say(text) {
 		echo "  [inbox] {text}"
-		return seen + 1
+		seen += 1
+		return Note.Counted(seen)
 	} else if note is Note.HowMany {
-		// `answer` replies to whoever is waiting. If the sender used `async`,
-		// nothing is waiting and this is a no-op — one handler serves both
-		// shapes without caring which it was.
-		hive.syslink.answer(from, Note.Counted(seen))
-		return seen
+		return Note.Counted(seen)
 	} else if note is Note.Counted(count) {
 		echo "  [inbox] someone told us they have seen {count} notes"
-		return seen
+		return note
 	} else if note is Note.Watch(peer) {
-		// A monitor needs the envelope, because a death notice has to land in
-		// some mailbox — this one.
-		hive.syslink.monitor(from, peer, Note.PeerLost())
+		hive.syslink.monitor(hive.syslink.at(#Inbox), peer, Note.PeerLost())
 		echo "  [inbox] watching the peer's inbox"
-		return seen
+		return note
 	} else if note is Note.PeerLost {
 		echo "  [inbox] !! the peer's inbox is gone"
-		return seen
-	} else if note is Note.Ignore {
-		// Handled, and deliberately not answered. Every envelope in this handler
-		// only ever reaches `answer` and `monitor`, so the compiler knows none of
-		// them can outlive their turn: whoever is waiting is told at once.
-		echo "  [inbox] ignoring that one on purpose"
-		return seen
-	} else if note is Note.Late(text) {
-		echo "  [inbox] a late answer arrived: {text}"
-		return seen
+		return note
+	} else if note is Note.Explode {
+		// A panic inside a service kills only that service: its monitors are
+		// told, its callers stop waiting, and the node carries on.
+		panic "the inbox was asked to explode"
 	}
-	// A panic inside a service kills only that service: its monitors are told,
-	// its callers stop waiting, and the node carries on.
-	panic "the inbox was asked to explode"
-}
-
-// A service that answers from another thread instead of from its turn — the
-// pattern for work too slow to hold a mailbox open for. `async answerLate(from)`
-// lets the envelope outlive the turn, so the compiler switches the automatic
-// `NoReply` off for this handler and the caller waits for the real answer.
-proc unhurried(handled: Int, note: Note, from: hive.syslink.Envelope): Int {
-	async answerLate(from)
-	return handled + 1
-}
-
-func answerLate(from: hive.syslink.Envelope): void {
-	hive.task.sleep(400)
-	hive.syslink.answer(from, Note.Late("worth the wait"))
 }
 
 proc main(): void {
@@ -212,23 +170,6 @@ proc chat(mine: hive.syslink.Address, theirs: hive.syslink.Address): void {
 	}
 	if both[1] is Result.Ok(here) && here is Note.Counted(n) {
 		echo "our own inbox says {n}"
-	}
-
-	// Forgetting to answer, seen from the caller's side. `inbox` handles this and
-	// never replies — and because its envelope cannot outlive the turn, this comes
-	// straight back rather than waiting out the four seconds asked for.
-	ignored := mine(Note.Ignore()) with timeout 4000
-	if ignored is Result.Error(err) {
-		echo "forgot to answer: {err.reason} — {err.message}"
-	}
-
-	// The other side of the same rule. `unhurried` hands its envelope to a call it
-	// does not wait for, so an answer may still be coming and nothing is failed
-	// early: the reply turns up 400ms later, and this call is what waits for it.
-	slow := hive.syslink.spawn(unhurried, 0)
-	late := slow(Note.Say("take your time")) with timeout 4000
-	if late is Result.Ok(reply) && reply is Note.Late(text) {
-		echo "answered late:    {text}"
 	}
 
 	echo "Type `boom` to crash the peer's inbox, or enter to finish."

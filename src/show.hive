@@ -129,12 +129,12 @@ func showParams(params: ast.Param[]): Str {
 func showType(t: ast.TypeExpr): Str {
 	if t is ast.TypeExpr.VoidType {
 		return "void"
-	} else if t is ast.TypeExpr.Fn(pure, params, result) {
+	} else if t is ast.TypeExpr.Fn(pure, params, mutexes, result) {
 		mut word := "proc"
 		if pure {
 			word = "func"
 		}
-		return "({word}(" + showTypes(params) + ") " + showType(result) + ")"
+		return "({word}(" + showFnParams(params, mutexes) + ") " + showType(result) + ")"
 	} else if t is ast.TypeExpr.Named(pkg, name, args, dims) {
 		mut out := name
 		if pkg != "" {
@@ -155,6 +155,22 @@ func showTypes(ts: ast.TypeExpr[]): Str {
 	mut Str[dyn] out = []
 	for each t in ts {
 		append(out, showType(t))
+	}
+	return join(out, ",")
+}
+
+func showFnParams(ts: ast.TypeExpr[], mutexes: Bool[]): Str {
+	mut Str[dyn] out = []
+	mut i := 0
+	for each t in ts {
+		mut shown := showType(t)
+		if mutexes bounds i {
+			if mutexes[i] {
+				shown = "mut " + shown
+			}
+		}
+		append(out, shown)
+		i = i + 1
 	}
 	return join(out, ",")
 }

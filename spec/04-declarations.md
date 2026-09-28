@@ -84,9 +84,8 @@ what was said wrongly.
 An annotation reaches a variant's own fields and the shared ones alike, and a
 shared field is annotated once for every variant it joins.
 
-Neither annotation changes what `hive.json.flatten(text)` does: that flattens a
-document rather than decoding a declared shape, so there is nothing there for a
-field to be named.
+Neither annotation reaches a `hive.json.JsonValue`, which is the document as
+written rather than a declared shape.
 
 ## 4.2 `func`
 

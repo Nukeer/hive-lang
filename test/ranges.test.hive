@@ -149,6 +149,14 @@ test "drop is the one builtin that makes a vector shorter" {
 	assert opens(problem(source), "in `main`: cannot prove `1` is in range")
 }
 
+test "a mutex argument may come back shorter, called by name or through a value" {
+	shrink := "proc shrink(v: mut Str[dyn]): void \{ v = [] }\n"
+	byName := inMain("mut Str[dyn] v = [\"a\"]  if v bounds 0 \{ shrink(v)  echo v[0] }")
+	assert opens(problem(shrink + byName), "in `main`: cannot prove `0` is in range")
+	byValue := inMain("mut Str[dyn] v = [\"a\"]  f := shrink  if v bounds 0 \{ f(v)  echo v[0] }")
+	assert opens(problem(shrink + byValue), "in `main`: cannot prove `0` is in range")
+}
+
 // --- Lengths that survive ----------------------------------------------------
 
 test "concatenation adds the two lengths" {

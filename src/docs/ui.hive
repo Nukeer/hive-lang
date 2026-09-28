@@ -36,11 +36,13 @@ func ui(): Str {
 		| call | what it does |
 		| --- | --- |
 		| ~BT~window(title, view, update, state)~BT~ | opens a window and **does not return** |
+		| ~BT~windowAddressed(title, view, update, state)~BT~ | the same, with ~BT~update~BT~ handed the window's address |
 		| ~BT~html(view)~BT~ | renders the tree as an HTML **fragment** → ~BT~Str~BT~ |
 		| ~BT~page(title, view)~BT~ | renders it as a whole **document** → ~BT~Str~BT~ |
 
 		~BT~view~BT~ is a ~BT~func(State): hive.ui.View~BT~ and ~BT~update~BT~ is a
-		~BT~proc(State, Msg, hive.syslink.Envelope): State~BT~.
+		~BT~proc(mut State, Msg): Msg~BT~ — for ~BT~windowAddressed~BT~,
+		~BT~proc(mut State, Msg, hive.syslink.Address): Msg~BT~.
 
 		| page | what is on it |
 		| --- | --- |
@@ -86,10 +88,9 @@ func ui(): Str {
 
 		## The window is a service
 
-		~BT~update~BT~ is **the same fold a [~BT~hive.syslink.spawn~BT~](syslink.md) handler is**,
-		and is checked as one. So a window **has an address**, needs no mutex, and can
-		be posted to by a background task or by another machine. That is why the module
-		needs no notion of a *command*.
+		~BT~update~BT~ is **a [~BT~hive.syslink.spawn~BT~](syslink.md) handler**, and is checked as
+		one. So a window **has an address** and can be posted to by a background task or
+		by another machine. That is why the module needs no notion of a *command*.
 
 		## The view is a ~BT~func~BT~, and that is not a formality
 
@@ -116,13 +117,14 @@ func ui(): Str {
 			])
 		}
 
-		proc update(state: State, message: Msg, from: hive.syslink.Envelope): State \{
+		proc update(state: mut State, message: Msg): Msg \{
 			if message is Msg.Typed(text) \{
-				return State(text, state.lines)
+				state.draft = text
+			} else if message is Msg.Send \{
+				append(state.lines, state.draft)
+				state.draft = ""
 			}
-			mut Str[dyn] next = state.lines
-			append(next, state.draft)
-			return State("", next)
+			return message
 		}
 
 		proc main(): void \{
@@ -357,12 +359,13 @@ func events(): Str {
 
 		The five scene events are [ui-scene-input](ui-scene-input.md).
 
-		## There is no command, and nothing to return
+		## There is no command
 
-		The message goes to ~BT~update~BT~, which is [a fold](syslink.md): it answers with the
-		next state and nothing else. **Work that has to happen goes to a service** — a
-		window has an address, so anything with something to say posts a message back to
-		it when it has one.
+		The message goes to ~BT~update~BT~, which is [a service's handler](syslink.md): it writes
+		the state, and what it returns is read only by a request from another node.
+		**Work that has to happen goes to a service** — a window has an address, which
+		~BT~windowAddressed~BT~ hands to ~BT~update~BT~, so anything with something to say posts a
+		message back to it when it has one.
 	`)
 }
 
@@ -963,14 +966,14 @@ func sceneInput(): Str {
 		program can keep up and are deliberately not the same when it cannot.
 
 		A window holds **at most one frame in flight**: having reported one it says
-		nothing more until the program has folded it, and while it waits the gap goes on
+		nothing more until the program has handled it, and while it waits the gap goes on
 		growing — so the frame that does go carries the whole of the time that passed. A
-		program that can fold sixty frames a second is told about sixty; one that can
+		program that can handle sixty frames a second is told about sixty; one that can
 		manage twenty is told about twenty, of fifty milliseconds each.
 
 		That is what makes it a clock. Were it one message per refresh regardless, a slow
 		program would be handed more frames than it could take, and since nothing between
-		the window and the fold ever drops a message the excess would **queue**: input
+		the window and ~BT~update~BT~ ever drops a message the excess would **queue**: input
 		would sit behind a backlog of stale frames, and a world stepped by the gaps in
 		them would run slower than real time.
 
@@ -984,7 +987,7 @@ func sceneInput(): Str {
 		a digit is itself, and everything else is the word for it — ~BT~space~BT~, ~BT~enter~BT~,
 		~BT~escape~BT~, ~BT~tab~BT~, ~BT~shift~BT~, ~BT~ctrl~BT~, ~BT~up~BT~, ~BT~down~BT~, ~BT~left~BT~, ~BT~right~BT~.
 
-		Hold state is the program's: ~BT~onKeyDown~BT~ and ~BT~onKeyUp~BT~ are what a fold uses to
+		Hold state is the program's: ~BT~onKeyDown~BT~ and ~BT~onKeyUp~BT~ are what ~BT~update~BT~ uses to
 		keep its own set of what is held.
 
 		## The mouse

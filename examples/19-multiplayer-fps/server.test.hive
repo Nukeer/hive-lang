@@ -6,12 +6,6 @@
 // `proc`s of a `World`, so every one of them can be called here — with no socket,
 // no clock and no client anywhere.
 //
-// **What cannot be called is `referee` itself**, and that is deliberate: it is a
-// handler, an envelope is opaque, and one only ever arrives as a handler's own
-// argument. So everything that fold decides lives in `heard`, `ticked` and `waking`
-// below it, and this file is the proof that this was worth doing — those three take
-// no envelope and a test drives them directly.
-//
 // Everything here is arithmetic, and deliberately: there is not a socket in the
 // file. The one thing arithmetic cannot check is that the two programs agree about
 // the wire, and that is `arena.test.hive` next door — a real server, a real client,
@@ -49,7 +43,7 @@ func blocks(): place.Block[dyn] {
 // fail — it is address construction rather than a lookup — so a test may name a
 // service that was never started, and an `async` at it goes quietly nowhere.
 //
-// Which is exactly what a test of the world wants: the fold below really does send
+// Which is exactly what a test of the world wants: the referee really does send
 // its snapshots, to a real address, and there is nobody on the other end.
 func nowhere(): hive.syslink.Address {
 	return hive.syslink.at(#Nobody)
@@ -241,7 +235,7 @@ test "one within reach bites, and does not bite again straight away" {
 	first := stirring(world, 100)
 	assert len(first.bitten) == 1
 	// A bite carries its own damage, because the three breeds are not worth the
-	// same — and it names the seat, because that is who the fold takes it out of.
+	// same — and it names the seat, because that is who the referee takes it out of.
 	for each bite in first.bitten {
 		assert bite.seat == 1
 		assert bite.damage == horde.teeth(wire.Breed.Zombie())
@@ -556,7 +550,7 @@ test "there are three breeds, and somewhere to put each of them" {
 // holding the shot, the health and the score board, so there is nothing to
 // reconcile and nobody to trust about the answer.
 //
-// Every test below drives `heard` — the fold's body — with the messages a client
+// Every test below drives `heard` with the messages a client
 // actually sends.
 
 test "three bullets put somebody down, and the shooter is credited" {

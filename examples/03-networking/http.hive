@@ -70,13 +70,12 @@ proc greet(request: hive.net.HttpRequest): hive.net.HttpResponse {
 	// stands in for a value that was never said, not for one said wrongly.
 	parsed := Greeting.decode(request.body, hive.json.codec())
 	if parsed is Result.Ok(greeting) {
-		// A whole document can also be flattened into a Table of
-		// [path, value] rows, and `hive.json.get` looks paths up in it. That is
-		// the way in for a shape the type does not declare — a nested object
-		// here, which no annotation on a scalar field could reach.
-		details := hive.json.flatten(request.body)
-		if details is Result.Ok(table) && hive.json.get(table, "details.note") is Result.Ok(note) {
-			return reply(200, "Hello {greeting.name}, glad you are {greeting.mood} — {note}\n")
+		// A shape the type does not declare is read as a `hive.json.JsonValue`
+		// and taken apart by its variants.
+		if hive.json.JsonValue.decode(request.body, hive.json.codec()) is Result.Ok(doc) {
+			if member(doc, "details") is Result.Ok(details) && member(details, "note") is Result.Ok(found) && found is hive.json.JsonValue.String(note) {
+				return reply(200, "Hello {greeting.name}, glad you are {greeting.mood} — {note}\n")
+			}
 		}
 		// `mood` and `visits` are whatever the body said, or what their
 		// defaults said, and nothing here has to tell those two apart.
@@ -87,9 +86,19 @@ proc greet(request: hive.net.HttpRequest): hive.net.HttpResponse {
 	}
 }
 
+func member(v: hive.json.JsonValue, key: Str): Result<hive.json.JsonValue, Bool> {
+	if v is hive.json.JsonValue.Object(properties) {
+		for each p in properties {
+			if p.key == key {
+				return Result.Ok(p.value)
+			}
+		}
+	}
+	return Result.Error(false)
+}
+
 // `encode` derives an encoder from the static type, so it cannot
-// fail — no Result involved. Table fields re-nest from their [path, value]
-// rows back into JSON.
+// fail — no Result involved.
 proc reply(status: Int, message: Str): hive.net.HttpResponse {
 	body := encode(Reply(message, hive.time.now()), hive.json.codec())
 	return hive.net.HttpResponse(status, [["Content-Type", "application/json"]], body)

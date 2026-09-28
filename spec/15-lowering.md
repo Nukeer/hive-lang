@@ -27,6 +27,8 @@ file, plus a generated `hive` runtime package.
 | `p(v: mut T)` (a mutex parameter) | `p(v *T)`, read and written through `(*v)` |
 | `p(mutVec)` (waited for) | `p(&mutVec)` — the callee writes the caller's own storage |
 | `async p(mutVec)` (fired off) | `{ _a0 := hive.CloneVec(mutVec); go p(&_a0) }` |
+| `proc(mut T, U): R` (a function type) | `func(*T, U) R` — a call through one hands over the address exactly as `p(mutVec)` does |
+| `hive.syslink.spawn(h, s)` | `hive.SyslinkSpawn(h, ..)`: each turn calls `h(&state, msg)` and replies with what it returns — a deep copy for a caller on this node |
 | `f(x)` / `async f(x)` | a plain call / `go f(x)` |
 | `x := async f(a)` | `_task_x := hive.Spawn(..)`, and every read of `x` becomes `_task_x.Await()` |
 | `f(x) with timeout ms` | `hive.AwaitTimeout(hive.Spawn(..), ms)` → a `Result` |
@@ -47,9 +49,9 @@ file, plus a generated `hive` runtime package.
 | `f` (bare reference) / `f(a, _, c)` | the function value / a closure whose parameter is the hole |
 | `func f(v: T[]): T` at `T = Str` | `func f_Str(v []string) string` — one copy per instantiation |
 | `hive.file.csv(p, s)` / `hive.sql.run(conn, q(..))` / `hive.sql.raw(conn, t)` | `hive.ReadCsv(..)` / `hive.SqlRows(..)` / `hive.SqlQuery(..)`, each → a `Result` |
-| a `hive.*` library call | a call of the same name on the generated `hive` runtime package (`hive.json.flatten` → `hive.JsonFlatten`) |
+| a `hive.*` library call | a call of the same name on the generated `hive` runtime package (`hive.time.now` → `hive.TimeNow`) |
 | `T.decode(t, c)` / `T.Variant.decode(t, c)` | `hive.JsonParse(t, jsonDecode_T)` / `hive.JsonParse(t, jsonDecode_T_Variant)` — `c` names the format and is not itself evaluated |
-| `encode(v, c)` | `jsonEncode_T(v)` for a declared `T`, else the encoder for the scalar, vector or `Table` it is — written at the call site from the format `c` names, never a runtime call |
+| `encode(v, c)` | `jsonEncode_T(v)` for a declared `T`, else the encoder for the scalar or vector it is — written at the call site from the format `c` names, never a runtime call |
 | `import hive.ui as ui`, then `ui.row(..)` | nothing — the alias is resolved during flattening, so the emitter only ever sees `hive.ui.row` |
 | `hive.map.Map<Str, Int>` | `hive.Dict[string, int]` — a key order beside a Go map |
 | `import ./util.go`, then `util.slugify(s)` | the file compiled as its own package, plus a wrapper `func util_0_slugify(s string) string { return ffi_util_1.Slugify(s) }`, with a copy around every value that owns storage |

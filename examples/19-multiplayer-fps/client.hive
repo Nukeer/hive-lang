@@ -92,11 +92,10 @@
 //     wherever there is something to say.
 //
 //   * `hive.syslink` is how the reading thread gets back in. **A window is a
-//     service** — `update` below is a fold over a mailbox, checked as one — so it
-//     has an address, and `hive.syslink.self` inside the fold is how a background
-//     task is handed it. That is why there is no queue in this program and no
-//     mutex: the socket reader posts what it heard, and it arrives at the same fold
-//     the keyboard arrives at, as one more variant.
+//     service**, so it has an address, and `ui.windowAddressed` hands it to
+//     `update`, which hands it to a background task. That is why there is no queue
+//     in this program and no lock: the socket reader posts what it heard, and it
+//     arrives where the keyboard arrives, as one more variant.
 //
 // WHAT THIS PROGRAM IS TRUSTED WITH
 // ---------------------------------
@@ -191,7 +190,7 @@ type Shot {
 }
 
 // The window's mailbox. A key you pressed and a line the server said arrive at the
-// same fold and are told apart only by which variant they are — which is the claim
+// same handler and are told apart only by which variant they are — which is the claim
 // `hive.syslink` makes, holding as far as the keyboard.
 type Msg {
 	// From the screen.
@@ -330,7 +329,7 @@ func stepped(model: Model, ms: Int): Model {
 // along a wall they are pushing into instead of stopping dead against it.
 func walked(model: Model, dt: Float): Body {
 	// In the water none of the rest of this applies: no gravity, no jumping, and
-	// half the speed. It is the one branch, and it is here rather than in the fold
+	// half the speed. It is the one branch, and it is here rather than in the handler
 	// because whether you are swimming is a fact about where you are.
 	if swimming(model) {
 		return paddled(model, dt)
@@ -1411,96 +1410,93 @@ func joinedOf(_typed: Str): Msg {
 }
 
 // ---------------------------------------------------------------------------
-// The fold
+// The window's handler
 // ---------------------------------------------------------------------------
 
 // The window's mailbox. A key, a mouse, a frame and the server all arrive here,
 // and there is one `is` chain for the lot.
-//
-// There is no mutex in this program. The fold is the mutex.
-proc update(model: Model, msg: Msg, from: hive.syslink.Envelope): Model {
-	mut Model next = model
-
+proc update(model: mut Model, msg: Msg, window: hive.syslink.Address): Msg {
 	if msg is Msg.Tick(ms) {
-		return ticked(model, ms)
+		model = ticked(model, ms)
+		return msg
 	}
 	if msg is Msg.Looked(dx, dy) {
 		// Not while there is a sentence on the go: the picture holds still, which
 		// is what makes reading back what you wrote possible.
 		if alive(model) && model.composing == false {
-			next.body = turned(model, dx, dy)
+			model.body = turned(model, dx, dy)
 		}
-		return next
+		return msg
 	}
 	if msg is Msg.Pressed(key) {
 		// The one branch that decides whether a key is a letter or a move, and it
 		// is checked first because while it is true nothing else about the key
 		// matters. `enter` is the only key here that acts, so it is the only one
-		// that leaves this `func`-shaped corner of the fold.
+		// that leaves this `func`-shaped corner of the handler.
 		if model.composing {
 			if key == "enter" {
-				return say(sealed(model), model.saying)
+				model = say(sealed(model), model.saying)
+			} else if key == "escape" {
+				model = sealed(model)
+			} else {
+				model = typed(model, key)
 			}
-			if key == "escape" {
-				return sealed(model)
-			}
-			return typed(model, key)
+			return msg
 		}
 		if key == "t" {
-			return opening(model)
+			model = opening(model)
+		} else if key == "tab" {
+			model.board = model.board == false
+		} else if held(model, key) == false {
+			append(model.held, key)
 		}
-		if key == "tab" {
-			next.board = model.board == false
-			return next
-		}
-		if held(model, key) == false {
-			append(next.held, key)
-		}
-		return next
+		return msg
 	}
 	if msg is Msg.Released(key) {
 		// Nothing is held while typing, so there is nothing to let go of — and the
 		// key that comes up is a letter that has already been typed.
-		if model.composing {
-			return model
+		if model.composing == false {
+			model.held = filter(model.held, isNotKey(_, key))
 		}
-		next.held = filter(model.held, isNotKey(_, key))
-		return next
+		return msg
 	}
 	if msg is Msg.Grabbed(on) {
-		next.aiming = on
+		model.aiming = on
 		// Letting the mouse go is how you get out, so it closes the score too —
 		// otherwise escape would leave the panel up with nothing holding it.
 		if on {
-			next.board = false
+			model.board = false
 		}
 		// The mouse going takes the half-typed line with it. Escape is one key and
 		// it means both things, and this is where the second one happens: the
 		// browser lets the pointer go and tells us about it afterwards.
 		if on == false {
-			return sealed(next)
+			model = sealed(model)
 		}
-		return next
+		return msg
 	}
 	if msg is Msg.NameTyped(text) {
-		next.me = text
-		return next
+		model.me = text
+		return msg
 	}
 	if msg is Msg.ServerTyped(text) {
-		next.server = text
-		return next
+		model.server = text
+		return msg
 	}
 	if msg is Msg.Joined {
-		return joining(model, from)
+		joining(model, window)
+		return msg
 	}
 	if msg is Msg.Left {
-		return leaving(model)
+		model = leaving(model)
+		return msg
 	}
 
 	// --- from the server ---
 
 	if msg is Msg.Heard(news) {
-		return told(model, news)
+		model = told(model, news)
+		return msg
 	}
 	if msg is Msg.Lost(why) {
 		// Leaving closes the socket itself, and the reader notices a moment later
@@ -1508,17 +1504,16 @@ proc update(model: Model, msg: Msg, from: hive.syslink.Envelope): Model {
 		// have lost, and telling the player their own Leave button failed would be
 		// worse than saying nothing.
 		if model.link is Link.None {
-			return model
+			return msg
 		}
 		// Otherwise the socket has gone on its own, and there is no game left to
 		// draw. Back to the lobby, with the reason on the screen — which is the
 		// honest thing to do about a server that stopped: everything on this screen
 		// came from it, and none of it is true any more.
-		mut Model out = unjoined(model)
-		out.trouble = why
-		return out
+		model = unjoined(model)
+		model.trouble = why
 	}
-	return next
+	return msg
 }
 
 // Everything the server can say, in one fold. Five messages, and four of them are
@@ -1628,38 +1623,32 @@ proc say(model: Model, text: Str): Model {
 // Three procs, and between them the whole of the networking: one that opens it,
 // one that writes to it, and one thread that does nothing but read.
 
-// Joining. `wsConnect` is I/O, and a fold is a `proc`, so the fold can simply do
-// it — there is no command to return and nothing to arrange. What it must not do
-// is *wait* for the answer: a screen that stopped drawing while it dialled is the
-// one thing a game may never do, so the reply arrives as a message like everything
+// Joining. `wsConnect` is I/O, and a handler is a `proc`, so it can simply do it —
+// there is no command to return and nothing to arrange. What it must not do is
+// *wait* for the answer: a screen that stopped drawing while it dialled is the one
+// thing a game may never do, so the reply arrives as a message like everything
 // else.
-proc joining(model: Model, from: hive.syslink.Envelope): Model {
-	mut Model next = model
+proc joining(model: mut Model, window: hive.syslink.Address): void {
 	if ready(model) == false {
-		return next
+		return
 	}
 	opened := hive.net.wsConnect(model.server)
 	if opened is Result.Error(problem) {
-		next.trouble = "{problem.reason} — {problem.message}"
-		return next
+		model.trouble = "{problem.reason} — {problem.message}"
 	} else if opened is Result.Ok(conn) {
-		next.link = Link.Live(conn)
-		next.screen = Screen.Joining()
-		next.trouble = ""
-		// `hive.syslink.self` is the window's own address, and handing it to a
-		// thread is the whole of how the socket gets back in. From here on, anything
-		// the server says arrives at this fold as `Msg.Heard`.
-		async listening(conn, hive.syslink.self(from))
-		tell(next, wire.Up.Join(model.me))
-		return next
+		model.link = Link.Live(conn)
+		model.screen = Screen.Joining()
+		model.trouble = ""
+		// From here on, anything the server says arrives at the window as `Msg.Heard`.
+		async listening(conn, window)
+		tell(model, wire.Up.Join(model.me))
 	}
-	return next
 }
 
 // The reader. One thread, one loop, and every line it decodes posted at the
 // window — which is why there is no queue in this program and nothing is locked:
-// `async` at a service never blocks, and the fold is the only thing that touches
-// the model.
+// `async` at a service never blocks, and the window's handler is the only thing
+// that touches the model.
 proc listening(connection: hive.net.WsConnection, window: hive.syslink.Address): void {
 	for ;; {
 		heard := hive.net.wsReceive(connection)
@@ -1787,8 +1776,8 @@ proc main(): void {
 	// program was first compiled and is inside the executable, so this runs with
 	// no network and nothing installed.
 	//
-	// The window *is* a service — `update` is checked as a `hive.syslink.spawn`
-	// handler and gets an address like one — which is what makes a background
-	// thread posting into it the ordinary thing it is above.
-	ui.window("Hive Arena", view, update, start(where))
+	// The window *is* a service, and `ui.windowAddressed` hands `update` its
+	// address — which is what makes a background thread posting into it the
+	// ordinary thing it is above.
+	ui.windowAddressed("Hive Arena", view, update, start(where))
 }

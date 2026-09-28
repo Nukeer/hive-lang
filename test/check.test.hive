@@ -141,13 +141,61 @@ test "what a func hands a mutex parameter is its own storage and nothing else" {
 	assert opens(got, "in `sneak`: `fill` asks for the mutex itself in `out: mut ...`")
 }
 
-test "a callable that asks for a mutex is neither referenced nor partially applied" {
+test "a callable that asks for a mutex is a value like any other" {
 	grow := "proc grow(v: mut Str[dyn], tag: Str): void \{ append(v, tag) }\n"
-	assert opens(problem(grow + inMain("f := grow")),
-		"in `main`: `grow` asks for the mutex itself in `v: mut ...`, so it cannot be used as a value")
-	assert opens(problem(grow + inMain("f := grow(_, \"x\")")),
-		"in `main`: `grow` asks for the mutex itself in `v: mut ...`, so it cannot be partially applied")
-	assert problemCount(grow + inMain("mut Str[dyn] v = []  grow(v, \"x\")")) == 0
+	assert problemCount(grow + inMain("mut Str[dyn] v = []  f := grow  f(v, \"x\")")) == 0
+	assert problemCount(grow + inMain("mut Str[dyn] v = []  f := grow(_, \"x\")  f(v)")) == 0
+	assert problemCount(grow + inMain("proc(mut Str[dyn], Str): void f = grow")) == 0
+}
+
+test "a call through a function value hands a mutex a `mut` variable" {
+	grow := "proc grow(v: mut Str[dyn], tag: Str): void \{ append(v, tag) }\n"
+	assert opens(problem(grow + inMain("f := grow  f([\"a\"], \"x\")")),
+		"in `main`: `f` asks for the mutex itself in parameter 1, so the argument has to be a `mut` variable")
+}
+
+test "a partial application never captures a mutex" {
+	grow := "proc grow(v: mut Str[dyn], tag: Str): void \{ append(v, tag) }\n"
+	assert opens(problem(grow + inMain("mut Str[dyn] v = []  f := grow(v, _)")),
+		"in `main`: `grow` asks for the mutex itself in `v: mut ...`, and a partial application captures")
+}
+
+test "a service's handler writes its state and answers with one of its own messages" {
+	note := "type Note \{ Say \{ text: Str } }\n"
+	good := "proc inbox(n: mut Int, note: Note): Note \{ return note }\n"
+	assert problemCount(note + good + inMain("box := hive.syslink.spawn(inbox, 0)")) == 0
+	plain := "proc inbox(n: Int, note: Note): Note \{ return note }\n"
+	assert opens(problem(note + plain + inMain("box := hive.syslink.spawn(inbox, 0)")),
+		"in `main`: a handler writes its state in place, so its first parameter takes the mutex itself")
+	answers := "proc inbox(n: mut Int, note: Note): Int \{ return n }\n"
+	assert opens(problem(note + answers + inMain("box := hive.syslink.spawn(inbox, 0)")),
+		"in `main`: a handler answers with one of its own messages, so it returns Note, and this one returns Int")
+	assert opens(problem(note + good + inMain("box := hive.syslink.spawn(inbox, \"none\")")),
+		"in `main`: the state `hive.syslink.spawn` starts the service with wants Int and this is Str")
+}
+
+test "a handler told its own address is started by the form that tells it" {
+	note := "type Note \{ Say \{ text: Str } }\n"
+	loud := "proc loud(n: mut Int, note: Note, me: hive.syslink.Address): Note \{ return note }\n"
+	assert problemCount(note + loud + inMain("box := hive.syslink.spawnAddressed(loud, 0)")) == 0
+	assert opens(problem(note + loud + inMain("box := hive.syslink.spawn(loud, 0)")),
+		"in `main`: `hive.syslink.spawn` wants a handler of the shape `proc(mut S, M): M`, and this one has 3 parameters. A handler told its own address is started with `hive.syslink.spawnAddressed`")
+}
+
+test "a library type is one the library has" {
+	assert opens(problem("proc h(from: hive.syslink.Envelope): void \{ }\n" + inMain("")),
+		"in `h`: `hive.syslink` has no type `Envelope`")
+}
+
+test "a call through a function value is held to its type" {
+	grow := "proc grow(v: mut Str[dyn], tag: Str): void \{ append(v, tag) }\n"
+	assert opens(problem(grow + inMain("mut Str[dyn] v = []  f := grow  f(v)")),
+		"in `main`: `f` takes 2 arguments, and this call passes 1 argument")
+	assert opens(problem(grow + inMain("mut Str[dyn] v = []  f := grow  f(v, 1)")),
+		"in `main`: argument 2 of `f` wants Str and this is Int")
+	plain := "proc plain(v: Str[dyn], tag: Str): void \{ }\n"
+	assert opens(problem(plain + inMain("proc(mut Str[dyn], Str): void f = plain")),
+		"in `main`: the declaration of `f` wants proc(mut Str[dyn], Str): void and this is proc(Str[dyn], Str): void")
 }
 
 test "a func cannot declare a mutex parameter" {
@@ -554,7 +602,7 @@ test "each codec's decode fails with its own module's error" {
 		"in `main`: the declaration of `r` wants Result<Sig, hive.crypto.JwtError> and this is Result<Sig, hive.json.JsonError>")
 	assert opens(problem(inMain("hive.codec.Codec<hive.net.QueryParamsError> c = hive.json.codec()")),
 		"in `main`: the declaration of `c` wants hive.codec.Codec<hive.net.QueryParamsError> and this is hive.codec.Codec<hive.json.JsonError>")
-	assert problemCount(inMain("if hive.json.flatten(\"x\") is Result.Error(why) \{ echo why.path }")) == 0
+	assert problemCount(inMain("if hive.json.JsonValue.decode(\"x\", hive.json.codec()) is Result.Error(why) \{ echo why.path }")) == 0
 }
 
 // --- A query string ----------------------------------------------------------
@@ -618,11 +666,53 @@ test "command-line flags are flat, and two fields cannot answer to one" {
 	assert problemCount("type S \{ somethingElse: Str -- Flag as something-else;\n something: Str }\nproc main(): void \{ }") == 0
 }
 
-test "the json module carries flatten, and no longer carries parse" {
-	// `hasName` is a list of its own, so a call added to `resultOf` alone is
-	// still refused — which is what this catches.
-	assert problemCount(inMain("if hive.json.flatten(\"x\") is Result.Ok(t) \{ echo t }")) == 0
+test "the json module no longer flattens a document into a table" {
+	assert opens(problem(inMain("echo hive.json.flatten(\"x\")")), "in `main`: `hive.json` has no `flatten`")
+	assert opens(problem(inMain("echo hive.json.table(\"x\")")), "in `main`: `hive.json` has no `table`")
+	assert opens(problem(inMain("Table t = []  echo hive.json.get(t, \"a\")")), "in `main`: `hive.json` has no `get`")
 	assert opens(problem(inMain("echo hive.json.parse(\"x\")")), "in `main`: `hive.json` has no `parse`")
+}
+
+// --- An undeclared document --------------------------------------------------
+
+test "a JsonValue is built, matched and read like any declared type" {
+	assert problemCount(inMain("v := hive.json.JsonValue.Object([hive.json.KV(\"a\", hive.json.JsonValue.Int(1))])  if v is hive.json.JsonValue.Object(props) \{ for each p in props \{ echo p.key } }")) == 0
+	assert problemCount("import hive.json\nfunc f(v: json.JsonValue): Bool \{ return v is json.JsonValue.Array(_) }\nproc main(): void \{ echo f(json.JsonValue.Boolean(true)) }") == 0
+	assert problemCount(inMain("if hive.json.JsonValue.decode(\"1\", hive.json.codec()) is Result.Ok(v) \{ echo encode(v, hive.json.codec()) }")) == 0
+	assert problemCount("type Doc \{ data: hive.json.JsonValue }\n" + inMain("if Doc.decode(\"x\", hive.json.codec()) is Result.Ok(d) \{ echo d.data }")) == 0
+}
+
+test "a JsonValue is named as it was written" {
+	assert opens(problem(inMain("echo hive.json.JsonValue.Null()")),
+		"in `main`: `hive.json.JsonValue` has no variant `Null`")
+	assert opens(problem(inMain("echo hive.json.KV(\"a\", hive.json.JsonValue.Int(1)).name")),
+		"in `main`: `hive.json.KV` has no field `name`")
+	assert opens(problem(inMain("hive.json.JsonValue v = hive.json.JsonValue.Int(1)  Int n = v")),
+		"in `main`: the declaration of `n` wants Int and this is hive.json.JsonValue")
+}
+
+test "a document says which variant it is, so it is read whole" {
+	assert opens(problem(inMain("if hive.json.JsonValue.Int.decode(\"1\", hive.json.codec()) is Result.Ok(v) \{ echo v }")),
+		"in `main`: a document says for itself which variant of `hive.json.JsonValue` it is")
+}
+
+test "a Table has no JSON, however deep it sits" {
+	assert opens(problem(inMain("Table t = []  echo encode(t, hive.json.codec())")),
+		"in `main`: `encode` cannot carry this: a `Table` — `Str[dyn][dyn]` — has no JSON of its own")
+	assert opens(problem(inMain("Str[dyn][dyn] t = []  echo encode(t, hive.json.codec())")),
+		"in `main`: `encode` cannot carry this")
+	doc := "type Doc \{ meta: Table }\ntype Outer \{ docs: Doc[dyn] }\n"
+	assert opens(problem(doc + inMain("if Doc.decode(\"x\", hive.json.codec()) is Result.Ok(d) \{ echo d }")),
+		"in `main`: `Doc.decode` cannot carry `Doc.meta`")
+	assert opens(problem(doc + inMain("echo encode(Outer([]), hive.crypto.jwtCodec(\"s\"))")),
+		"in `main`: `encode` cannot carry `Doc.meta`")
+	// A vector of rows of anything else still travels.
+	assert problemCount(inMain("Int[dyn][dyn] t = []  echo encode(t, hive.json.codec())")) == 0
+}
+
+test "Table has no decoder, and says what reads an undeclared document" {
+	assert opens(problem(inMain("if Table.decode(\"[]\", hive.json.codec()) is Result.Ok(t) \{ echo t }")),
+		"in `main`: `Table` is not a declared type, so it has no decoder. A document with no declared shape is read with `hive.json.JsonValue.decode(text, hive.json.codec())`")
 }
 
 test "a token is written and read by the codec it names" {

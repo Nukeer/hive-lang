@@ -62,13 +62,9 @@ func hasName(module: Str, name: Str): Bool {
 			|| name == "delete" || name == "keys" || name == "values"
 			|| name == "fromTable" || name == "toTable"
 	}
-	// Encoding and decoding are not here: they derive from a declaration rather
-	// than being carried, so they are `encode` ([13](13-builtins.md)) and
-	// `T.decode`. What this module contributes to them is `codec()`, the value
-	// that says read and write it as JSON.
+	// `encode` and `T.decode` derive from declarations; `JsonValue` is in `declarationsOf`.
 	if module == "json" {
-		return name == "flatten" || name == "table" || name == "get"
-			|| name == "codec"
+		return name == "codec"
 	}
 	// `run` answers with what the query it was handed declared, so with no
 	// arguments to read there is nothing for `resultOf` to say.
@@ -249,20 +245,51 @@ func jsonResult(name: Str, args: types.Ty[]): types.Ty {
 	jsonError := codecErrorOf("json")
 	// The value that says JSON, for the call that is going to read or write one.
 	if name == "codec" { return types.Ty.TCodec(jsonError) }
-	if name == "table" {
-		return types.Ty.TResult(table(), jsonError)
-	}
-	// A flattened document is looked up by path, and a path that is not in it is
-	// an ordinary answer rather than a failure.
-	if name == "get" {
-		return types.Ty.TResult(types.Ty.TStr(), jsonError)
-	}
-	// A whole document flattened into `[path, value]` rows, which is the one
-	// reading that needs no type to say what it wants.
-	if name == "flatten" {
-		return types.Ty.TResult(table(), jsonError)
-	}
 	return types.Ty.TUnknown()
+}
+
+// Types a module declares in Hive, flattened in by the loader when a program
+// names one, so they get everything a declared type gets.
+func declaringModules(): Str[dyn] {
+	return ["json"]
+}
+
+func declarationsOf(module: Str): Str {
+	if module == "json" {
+		return `
+			type JsonValue \{
+				String \{ value: Str }
+				Boolean \{ value: Bool }
+				Int \{ value: Int }
+				Float \{ value: Float }
+				Array \{ values: JsonValue[dyn] }
+				Object \{ properties: KV[dyn] }
+			}
+
+			type KV \{
+				key: Str
+				value: JsonValue
+			}
+		`
+	}
+	return ""
+}
+
+// A type name holds no `_`, so no program can declare one of these.
+func flatName(module: Str, name: Str): Str {
+	return "hive_" + module + "_" + name
+}
+
+func isJsonValue(name: Str): Bool {
+	return name == flatName("json", "JsonValue")
+}
+
+func tableHasNoJson(): Str {
+	return "a `Table` — `Str[dyn][dyn]` — has no JSON of its own. A document with no declared shape is a `hive.json.JsonValue`, and rows that mean something are a vector of a type declared for them"
+}
+
+func tableHasNoDecoder(): Str {
+	return "`Table` is not a declared type, so it has no decoder. A document with no declared shape is read with `hive.json.JsonValue.decode(text, hive.json.codec())`"
 }
 
 // What decoding in a format fails with: each module that carries a codec owns it.
@@ -334,11 +361,11 @@ func codecFormats(): Str[dyn] {
 func syslinkResult(name: Str): types.Ty {
 	address := types.Ty.TLib("syslink", "Address")
 	syslinkError := types.Ty.TLib("syslink", "SyslinkError")
-	if name == "spawn" || name == "at" || name == "on" || name == "self" {
+	if name == "spawn" || name == "spawnAddressed" || name == "at" || name == "on" {
 		return address
 	}
 	if name == "register" { return types.Ty.TResult(address, syslinkError) }
-	if name == "stop" || name == "answer" || name == "monitor" {
+	if name == "stop" || name == "monitor" {
 		return types.Ty.TVoid()
 	}
 	if name == "listen" {
@@ -474,11 +501,8 @@ func isOpaque(module: Str, name: Str): Bool {
 	if module == "sql" {
 		return name == "SqlConnection"
 	}
-	// An address is produced by `spawn`, `at` or `self`; an envelope only ever
-	// arrives as a handler's third parameter. Neither is taken apart, but both
-	// are written down as a type.
 	if module == "syslink" {
-		return name == "Address" || name == "Envelope"
+		return name == "Address"
 	}
 	// A view, an attribute, a shape, and the enumerations. Registering them is
 	// what lets a `func` answering with a `hive.ui.View` be written down.
@@ -785,7 +809,7 @@ func uiResult(name: Str): types.Ty {
 	if name == "html" || name == "page" { return types.Ty.TStr() }
 	// A window does not return: it shows the view and folds events until the
 	// program ends.
-	if name == "window" { return types.Ty.TVoid() }
+	if name == "window" || name == "windowAddressed" { return types.Ty.TVoid() }
 	return types.Ty.TUnknown()
 }
 
@@ -852,10 +876,7 @@ func uiParams(name: Str): types.Ty[dyn] {
 	}
 	if name == "html" { return [view] }
 	if name == "page" { return [str, view] }
-	// A window is a service with a page in front of it: what it is called, what
-	// draws it, what folds a message into its state, and that state to begin with.
-	// The last two are the program's own, so only their positions are said here.
-	if name == "window" {
+	if name == "window" || name == "windowAddressed" {
 		return [str, types.Ty.TUnknown(), types.Ty.TUnknown(), types.Ty.TUnknown()]
 	}
 	// An event takes the message itself, or a function to one. What its handler
@@ -972,12 +993,7 @@ func paramsOf(module: Str, name: Str): types.Ty[dyn] {
 	if module == "env" { return [types.Ty.TStr()] }
 	if module == "task" { return [types.Ty.TInt()] }
 	if module == "time" { return timeParams(name) }
-	if module == "json" {
-		if name == "table" || name == "flatten" { return [types.Ty.TStr()] }
-		if name == "get" { return [table(), types.Ty.TStr()] }
-		// `codec()` takes nothing: it is the value that says JSON.
-		return []
-	}
+	if module == "json" { return [] }
 	if module == "map" { return mapParams(name) }
 	if module == "ui" { return uiParams(name) }
 	if module == "syslink" { return syslinkParams(name) }
@@ -1029,20 +1045,15 @@ func mapParams(name: Str): types.Ty[dyn] {
 
 func syslinkParams(name: Str): types.Ty[dyn] {
 	address := types.Ty.TLib("syslink", "Address")
-	envelope := types.Ty.TLib("syslink", "Envelope")
-	// A handler, its state, and the messages they pass are the program's own, so
-	// what is said about those positions is that they are there.
 	any := types.Ty.TUnknown()
 	// A service name is an atom, which lets the compiler know the registry.
 	if name == "at" { return [types.Ty.TAtom()] }
 	if name == "on" { return [types.Ty.TStr(), types.Ty.TAtom()] }
 	if name == "register" { return [types.Ty.TAtom(), address] }
 	if name == "stop" { return [address] }
-	if name == "self" { return [envelope] }
 	if name == "listen" { return [types.Ty.TStr()] }
-	if name == "spawn" { return [any, any] }
-	if name == "answer" { return [envelope, any] }
-	if name == "monitor" { return [envelope, address, any] }
+	if name == "spawn" || name == "spawnAddressed" { return [any, any] }
+	if name == "monitor" { return [address, address, any] }
 	// `node` and `peers` ask for nothing.
 	return []
 }
@@ -1094,7 +1105,7 @@ func netParams(name: Str): types.Ty[dyn] {
 // A server's handler: one argument in, one value out, and impure — a `func`
 // value goes where a `proc` is wanted, so writing it this way round takes both.
 func handler(takes: types.Ty, gives: types.Ty): types.Ty {
-	return types.Ty.TFn(false, [takes], gives)
+	return types.Ty.TFn(false, [takes], [false], gives)
 }
 
 func strings(): types.Ty {

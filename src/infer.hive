@@ -179,10 +179,12 @@ func identType(env: Env, name: Str): types.Ty {
 
 func callableType(t: types.Table, info: types.CallableInfo): types.Ty {
 	mut types.Ty[dyn] params = []
+	mut Bool[dyn] mutexes = []
 	for each p in info.params {
 		append(params, types.resolve(t, p.declared))
+		append(mutexes, p.mutex)
 	}
-	return types.Ty.TFn(info.pure, params, types.resolve(t, info.result))
+	return types.Ty.TFn(info.pure, params, mutexes, types.resolve(t, info.result))
 }
 
 // Arithmetic answers with what it was given; a comparison and a connective
@@ -412,7 +414,7 @@ func resultConstructor(variant: Str, argTypes: types.Ty[]): types.Ty {
 }
 
 func resultOfFn(ty: types.Ty): types.Ty {
-	if ty is types.Ty.TFn(_, _, result) {
+	if ty is types.Ty.TFn(_, _, _, result) {
 		return result
 	}
 	return types.Ty.TUnknown()
@@ -431,15 +433,17 @@ func hasHole(args: ast.Arg[]): Bool {
 func partialType(env: Env, callee: ast.Expr, args: ast.Arg[]): types.Ty {
 	whole := typeOf(env, callee)
 	mut types.Ty[dyn] holes = []
-	if whole is types.Ty.TFn(pure, params, result) {
+	if whole is types.Ty.TFn(pure, params, mutexes, result) {
+		mut Bool[dyn] holeMutexes = []
 		mut i := 0
 		for each a in args {
 			if a.value is ast.Expr.Hole {
 				append(holes, typeAt(params, i))
+				append(holeMutexes, types.mutexAt(mutexes, i))
 			}
 			i = i + 1
 		}
-		return types.Ty.TFn(pure, holes, result)
+		return types.Ty.TFn(pure, holes, holeMutexes, result)
 	}
 	// A constructor with a hole is a function too: each `_` still becomes a
 	// parameter in hole order, and what comes back is typed as what it builds.
@@ -456,7 +460,7 @@ func partialType(env: Env, callee: ast.Expr, args: ast.Arg[]): types.Ty {
 		}
 		at = at + 1
 	}
-	return types.Ty.TFn(true, holes, built)
+	return types.Ty.TFn(true, holes, types.noMutexes(len(holes)), built)
 }
 
 // The fields a constructor takes, or nothing when the callee is not one.
@@ -511,6 +515,35 @@ type CallTarget {
 	Union
 	// Nothing in scope declared it.
 	Unknown
+}
+
+func mutexArguments(env: Env, callee: ast.Expr, args: ast.Arg[]): ast.Expr[dyn] {
+	mut ast.Expr[dyn] out = []
+	if callee is ast.Expr.Ident(name) {
+		if callTarget(env, name) is CallTarget.Declared(info) {
+			mut open := 0
+			for each p in info.params {
+				found := ast.argFor(args, p.name, open)
+				if ast.claimedByName(args, p.name) == false {
+					open = open + 1
+				}
+				if p.mutex {
+					append(out, found)
+				}
+			}
+			return out
+		}
+	}
+	if typeOf(env, callee) is types.Ty.TFn(_, _, mutexes, _) {
+		mut i := 0
+		for each a in args {
+			if types.mutexAt(mutexes, i) {
+				append(out, a.value)
+			}
+			i = i + 1
+		}
+	}
+	return out
 }
 
 func callTarget(env: Env, name: Str): CallTarget {
