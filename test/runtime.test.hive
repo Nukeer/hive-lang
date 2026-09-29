@@ -117,3 +117,16 @@ test "the resolver is not a module a program can name" {
 	assert stdlib.isKnownModule("syslinknet") == false
 	assert stdlib.isKnownModule("net")
 }
+
+// Stdout is the program's. A crash notice there lands in whatever the output was
+// piped to — the middle of a JSON document, say.
+test "what the runtime says about itself goes to stderr" {
+	for each module in ["syslink", "syslinknet", "ui"] {
+		source := runtime.moduleSource(module)
+		assert text.contains(source, "fmt.Println(\"hive: ") == false
+		assert text.contains(source, "fmt.Printf(\"hive: ") == false
+	}
+	assert text.contains(runtime.moduleSource("syslink"), "fmt.Fprintln(os.Stderr, \"hive: \" + serviceLabel(b) + \" crashed: \"")
+	// The one line a host reads is on stdout by design.
+	assert text.contains(runtime.uiSource(), "fmt.Println(\"hive-window \" + url)")
+}

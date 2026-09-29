@@ -5785,20 +5785,20 @@ func syslinkSource(): Str {
 				}
 				raw, err := b.value(d)
 				if err != nil \{
-					fmt.Println("hive: " + serviceLabel(b) + " dropped a message: " + err.Error())
+					fmt.Fprintln(os.Stderr, "hive: " + serviceLabel(b) + " dropped a message: " + err.Error())
 					failDelivery(d, "Decode", serviceLabel(b)+" could not read the message: "+err.Error())
 					continue
 				}
 				msg, fits := raw.(M)
 				if !fits \{
-					fmt.Println("hive: " + serviceLabel(b) + " dropped a message of an unexpected type")
+					fmt.Fprintln(os.Stderr, "hive: " + serviceLabel(b) + " dropped a message of an unexpected type")
 					failDelivery(d, "Decode", serviceLabel(b)+" does not handle messages of that type")
 					continue
 				}
 				out, crashed := serviceTurn(turn, &state, msg, syslinkTurn\{self: b, drawn: d.drawn})
 				if crashed != nil \{
 					reason = Show(crashed)
-					fmt.Println("hive: " + serviceLabel(b) + " crashed: " + reason)
+					fmt.Fprintln(os.Stderr, "hive: " + serviceLabel(b) + " crashed: " + reason)
 					failDelivery(d, "Down", "the service crashed while handling the request: "+reason)
 					break
 				}
@@ -6685,7 +6685,7 @@ func syslinkNetSource(): Str {
 
 			failCallsToNode(s.node, "the node at "+s.node+" is unreachable: "+reason)
 			nodeDown(s.node)
-			fmt.Println("hive: the node at " + s.node + " is down (" + reason + ")")
+			fmt.Fprintln(os.Stderr, "hive: the node at " + s.node + " is down (" + reason + ")")
 		}
 
 		func (s *session) writer() \{
@@ -6913,7 +6913,7 @@ func syslinkNetSource(): Str {
 		func acceptSession(conn *tls.Conn) \{
 			peer, err := handshakeResponder(conn)
 			if err != nil \{
-				fmt.Println("hive: rejected a connection: " + err.Error())
+				fmt.Fprintln(os.Stderr, "hive: rejected a connection: " + err.Error())
 		`,
 		// Tell the caller it was turned away, without saying which check failed:
 		// "EOF" is a miserable thing to debug against, and an unauthenticated
@@ -9643,7 +9643,7 @@ func uiSource(): Str {
 		`
 			if len(scenes) > 1 \{
 				uiSceneCrowd.Do(func() \{
-					fmt.Println("hive: a window draws one scene, and this view has " +
+					fmt.Fprintln(os.Stderr, "hive: a window draws one scene, and this view has " +
 						strconv.Itoa(len(scenes)) + " — the first one is the one on screen")
 				})
 			}
@@ -9889,7 +9889,7 @@ func uiSource(): Str {
 				listener.Close()
 			}
 			if Release() == 0 \{
-				fmt.Println("hive: the window was closed")
+				fmt.Fprintln(os.Stderr, "hive: the window was closed")
 				os.Exit(0)
 			}
 		}
@@ -10030,7 +10030,7 @@ func uiSource(): Str {
 			go uiServe(w, addr, page, ready)
 			bound := <-ready
 			if bound == 0 \{
-				fmt.Println("hive: the window could not be opened — no port could be bound")
+				fmt.Fprintln(os.Stderr, "hive: the window could not be opened — no port could be bound")
 				return
 			}
 			Hold()
@@ -10040,7 +10040,7 @@ func uiSource(): Str {
 		// Not fatal: the address still works, and saying so is more use than
 		// exiting on a machine with no browser to launch.
 		`
-				fmt.Println("hive: open " + url)
+				fmt.Fprintln(os.Stderr, "hive: open " + url)
 			}
 		}
 		`,
@@ -10081,7 +10081,7 @@ func uiSource(): Str {
 			}
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
-			fmt.Printf("hive: folds %d/s drawn %d/s | update %s | view %s | publish %s | gc %d, %.1fms\n",
+			fmt.Fprintf(os.Stderr, "hive: folds %d/s drawn %d/s | update %s | view %s | publish %s | gc %d, %.1fms\n",
 				t.folds, t.drawn, uiSpread(t.update), uiSpread(t.view), uiSpread(t.publish),
 				m.NumGC-t.gcs, float64(m.PauseTotalNs-t.paused)/1e6)
 			t.gcs, t.paused = m.NumGC, m.PauseTotalNs
@@ -10416,7 +10416,7 @@ func uiSource(): Str {
 		func uiListen() (net.Listener, int) \{
 			listener, err := net.Listen("tcp", "127.0.0.1:0")
 			if err != nil \{
-				fmt.Println("hive: ui.window could not bind a local port: " + err.Error())
+				fmt.Fprintln(os.Stderr, "hive: ui.window could not bind a local port: " + err.Error())
 				return nil, 0
 			}
 			return listener, listener.Addr().(*net.TCPAddr).Port

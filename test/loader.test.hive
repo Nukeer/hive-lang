@@ -286,6 +286,24 @@ test "an error inside an imported module is reported in that module, by its own 
 	}
 }
 
+// Taking the prefix off once cost the message as many characters from its end.
+test "a message moved into its module loses its prefix and nothing else" {
+	put("lib/tail.hive", "func half(n: Str): Str \{ return n + 1 }")
+	entry := put("usesTail.hive", "import ./lib/tail\nproc main(): void \{ echo tail.half(\"2\") }")
+	p := loader.load(entry)
+	raw := check.checkModule(p.module)
+	placed := loader.placed(p, entry, raw)
+	assert len(raw) == 1
+	assert len(placed) == 1
+	for each d in raw {
+		assert text.startsWith(d.message, "in `tail_0_half`: ")
+		assert text.endsWith(d.message, "Str and Int")
+		for each moved in placed {
+			assert moved.message == text.replace(d.message, "tail_0_", "")
+		}
+	}
+}
+
 test "a Go file's exported functions arrive as ordinary funcs" {
 	// Nothing in the file is Hive, and what Hive takes from it is the
 	// signatures — read by the Go toolchain, which is why this test runs one.

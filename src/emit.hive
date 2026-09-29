@@ -114,6 +114,8 @@ type Emit {
 	// The line the declaration being emitted was declared on — the only position
 	// a flattened program can offer.
 	line: Int
+	// Its name, which is what places a message in the file it came from.
+	decl: Str
 	// Set where a window is emitted, and read off `Emitted` by the build.
 	window: Bool
 	errors: diag.Diagnostic[dyn]
@@ -124,7 +126,7 @@ type Emit {
 // Emit a whole program.
 proc emitModule(m: ast.Module): Emitted {
 	t := types.tableOf(m)
-	mut Emit em = Emit(t, [], 0, ["Nil"], [], [], [], [], [], [], 0, [], [], [], [], false, false, false, -1, [], writes.writtenShapes(m), [], 0, false, [], [], "")
+	mut Emit em = Emit(t, [], 0, ["Nil"], [], [], [], [], [], [], 0, [], [], [], [], false, false, false, -1, [], writes.writtenShapes(m), [], 0, "", false, [], [], "")
 
 	line(em, "package main")
 	line(em, "")
@@ -156,8 +158,10 @@ proc emitModule(m: ast.Module): Emitted {
 	emitClones(em, m.decls)
 	for each d in m.decls {
 		em.line = ast.declLine(d)
+		em.decl = ast.declName(d)
 		emitDecl(em, env, d)
 	}
+	em.decl = ""
 	// A codec is asked for wherever a program encodes or decodes something,
 	// which can be anywhere — so they are written after everything that could
 	// ask has been walked. A row mapper is the same story.
@@ -214,7 +218,10 @@ proc close(em: mut Emit, written: Str): void {
 
 // A type's decoder and encoder can each fail for one reason, which is said once.
 proc fail(em: mut Emit, message: Str): void {
-	found := diag.at(em.line, message)
+	mut found := diag.at(em.line, message)
+	if em.decl != "" {
+		found = diag.at(em.line, diag.inDecl(em.decl, message))
+	}
 	if indexOf(em.errors, found) is Result.Error(_) {
 		append(em.errors, found)
 	}
@@ -796,10 +803,27 @@ proc emitExprStmt(em: mut Emit, env: infer.Env, value: ast.Expr): void {
 	line(em, expr(em, env, value, types.Ty.TUnknown()))
 }
 
-proc builtinStatement(em: mut Emit, env: infer.Env, name: Str, args: ast.Arg[]): Bool {
-	if infer.isBuiltin(name) == false {
+proc builtinStatement(em: mut Emit, env: infer.Env, name: Str, written: ast.Arg[]): Bool {
+	if name != "append" && name != "prepend" && name != "drop" && name != "sort" {
 		return false
 	}
+	// A statement has somewhere to put what has to run first, so arguments named
+	// out of order are worked out into temporaries, in the order written.
+	mut ast.Arg[dyn] held = []
+	if writtenOutOfOrder(written, infer.builtinParams(name, len(written))) {
+		for each a in written {
+			if settled(a.value) || pathOf(a.value) != "" {
+				append(held, a)
+			} else {
+				temp := fresh(em, "w")
+				line(em, temp + " := " + expr(em, env, a.value, infer.typeOf(env, a.value)))
+				append(held, ast.Arg(a.name, ast.Expr.Ident(temp)))
+			}
+		}
+	} else {
+		held = copiedArgs(written)
+	}
+	args := infer.builtinArgs(name, held)
 	if name == "append" && len(args) == 2 {
 		target := argExpr(args, 0)
 		line(em, expr(em, env, target, types.Ty.TUnknown()) + " = append(" + expr(em, env, target, types.Ty.TUnknown()) + ", " + expr(em, env, argExpr(args, 1), types.elementOf(infer.typeOf(env, target))) + ")")
@@ -2730,7 +2754,21 @@ func copiedArgs(args: ast.Arg[]): ast.Arg[dyn] {
 
 // --- The global builtins -----------------------------------------------------
 
-proc builtin(em: mut Emit, env: infer.Env, name: Str, args: ast.Arg[], want: types.Ty): Str {
+proc builtin(em: mut Emit, env: infer.Env, name: Str, written: ast.Arg[], want: types.Ty): Str {
+	names := infer.builtinParams(name, len(written))
+	if writtenOutOfOrder(written, names) {
+		answer := infer.typeOf(env, ast.Expr.Call(ast.Expr.Member(ast.Expr.Ident("hive"), name), copiedArgs(written)))
+		if answer is types.Ty.TVoid || concrete(answer) {
+			// What a builtin grows in place is its caller's own storage.
+			mut Bool[dyn] mutexes = []
+			if name == "append" || name == "prepend" || name == "drop" {
+				mutexes = [true]
+			}
+			h := hoist(em, env, written, names, infer.typesOfArgs(env, infer.builtinArgs(name, written)), mutexes, true)
+			return inWrittenOrder(h, goResult(answer), builtin(em, h.env, name, h.args, want))
+		}
+	}
+	args := infer.builtinArgs(name, written)
 	if name == "spawn" || name == "at" || name == "kill" {
 		return serviceBuiltin(em, env, name, args)
 	}
@@ -4361,12 +4399,26 @@ func flatValueName(ty: types.Ty): Str {
 
 // --- The standard library ----------------------------------------------------
 
-proc libraryCall(em: mut Emit, env: infer.Env, module: Str, name: Str, args: ast.Arg[], want: types.Ty): Str {
+proc libraryCall(em: mut Emit, env: infer.Env, module: Str, name: Str, written: ast.Arg[], want: types.Ty): Str {
 	if stdlib.isKnownModule(module) == false {
 		fail(em, "this compiler does not carry `hive.{module}`")
 		return "nil"
 	}
 	useModule(em, module)
+	names := stdlib.paramNamesOf(module, name)
+	if len(stdlib.fieldsOf(module, name)) == 0 && writtenOutOfOrder(written, names) {
+		answer := infer.typeOf(env, ast.Expr.Call(ast.Expr.Member(ast.Expr.Member(ast.Expr.Ident("hive"), module), name), copiedArgs(written)))
+		if answer is types.Ty.TVoid || concrete(answer) {
+			// The map `set` and `delete` write into is the caller's own.
+			mut Bool[dyn] mutexes = []
+			if module == "map" && (name == "set" || name == "delete") {
+				mutexes = [true]
+			}
+			h := hoist(em, env, written, names, infer.typesOfArgs(env, stdlib.libraryArgs(module, name, written)), mutexes, true)
+			return inWrittenOrder(h, goResult(answer), libraryCall(em, h.env, module, name, h.args, want))
+		}
+	}
+	args := stdlib.libraryArgs(module, name, written)
 	// Turning the terminal's echo off is a file of its own plus one per platform,
 	// so a program that never asks for a secret carries none of them.
 	if module == "term" && name == "readSecret" {
@@ -4509,7 +4561,7 @@ proc emitTests(m: ast.Module, atoms: Str[], codecs: Str[], modules: Str[]): Emit
 	t := types.tableOf(m)
 	// What `main.go` already wrote or asked for is seeded rather than repeated:
 	// the two files are one Go package.
-	mut Emit em = Emit(t, [], 0, copiedNames(atoms), copiedNames(modules), [], [], lentFuncs(t, m.decls), [], copiedNames(codecs), 0, [], [], [], [], true, false, false, -1, [], writes.writtenShapes(m), [], 0, false, [], handingBackFuncs(t, m.decls), "")
+	mut Emit em = Emit(t, [], 0, copiedNames(atoms), copiedNames(modules), [], [], lentFuncs(t, m.decls), [], copiedNames(codecs), 0, [], [], [], [], true, false, false, -1, [], writes.writtenShapes(m), [], 0, "", false, [], handingBackFuncs(t, m.decls), "")
 	written := len(codecs)
 	mut found := false
 	for each d in m.decls {
@@ -4535,6 +4587,7 @@ proc emitTests(m: ast.Module, atoms: Str[], codecs: Str[], modules: Str[]): Emit
 	for each d in m.decls {
 		if d is ast.Decl.TestDecl(title, body, declaredOn) {
 			em.line = declaredOn
+			em.decl = ast.declName(d)
 			enterBody(em)
 			em.cells = cellNames(t, env, [], body)
 			open(em, "t.Run(" + quoted(title) + ", func(t *testing.T) \{")

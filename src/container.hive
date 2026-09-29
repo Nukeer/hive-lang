@@ -19,6 +19,7 @@ import ./fetch
 import ./loader
 import ./paths
 import ./progress
+import ./project
 import ./text
 import ./version
 import hive.conv
@@ -60,11 +61,13 @@ proc write(entry: Str, from: Int): Result<Str, diag.Diagnostic[dyn]> {
 	if reachable(inside) == false {
 		return Result.Error([diag.about(entry, outside(entry))])
 	}
-	progress.step(from, "reading {entry}")
-	program := loader.load(entry)
-	if len(program.errors) > 0 {
-		return Result.Error(program.errors)
+	// An image is only as good as the build inside it, so the program is held to
+	// what `hive check` holds it to before anything is written.
+	found := project.check(entry, from)
+	if len(found) > 0 {
+		return Result.Error(found)
 	}
+	program := loader.load(entry)
 	needs := needsOf(program)
 	path := fileName()
 	progress.step(from, "writing {path}")
@@ -258,9 +261,9 @@ proc serving(found: mut Found, callee: ast.Expr, args: ast.Arg[]): void {
 	name := libCall(callee)
 	if name == "hive.net.httpServe" || name == "hive.net.wsServe"
 		|| name == "hive.net.socketServe" {
-		append(found.served, Served(name, literalPort(args)))
+		append(found.served, Served(name, literalPort(ast.positional(args, ["port", "handler"]))))
 	} else if name == "hive.syslink.listen" {
-		append(found.served, Served(name, addressPort(args)))
+		append(found.served, Served(name, addressPort(ast.positional(args, ["endpoint"]))))
 	} else if text.startsWith(name, "hive.sql.") {
 		found.database = true
 	}
@@ -357,7 +360,8 @@ func header(entry: Str, needs: Needs): Str {
 		#
 	`)
 	append(out, "# Written by ~BT~hive container {entry}~BT~, and an ordinary Dockerfile from there")
-	append(out, "# on: editing it is expected, and running the command again writes it afresh.")
+	append(out, "# on: editing it is expected. Running the command again leaves a Dockerfile")
+	append(out, "# alone, and writes Dockerfile-hive-container beside it.")
 	return join(out, "\n")
 }
 

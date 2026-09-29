@@ -87,9 +87,8 @@ func index(): Str {
 		3. **Every index must be proved in range** at compile time, or guarded with
 		   ~BT~if v bounds i~BT~. See [bounds](bounds.md).
 		4. **A slice's high bound is inclusive**: ~BT~v[1:3]~BT~ is three elements.
-		5. **~BT~append~BT~ needs a ~BT~mut~BT~ vector whose length is not a promise**: a
-		   ~BT~mut T[dyn]~BT~, or ~BT~mut v := ["a"]~BT~, whose length is only inferred. A length
-		   written in the type — ~BT~mut Str[3] v~BT~ — cannot grow.
+		5. **~BT~append~BT~ needs a ~BT~mut T[dyn]~BT~**, and ~BT~[dyn]~BT~ is declared, never inferred:
+		   ~BT~mut v := ["a"]~BT~ is a ~BT~Str[1]~BT~ and cannot grow.
 		6. **No number is widened for you.** ~BT~Int~BT~ does not become ~BT~Float~BT~; go through
 		   ~BT~hive.conv.itf~BT~.
 		7. **A name's spelling says what it is** — ~BT~camelCase~BT~ values, ~BT~PascalCase~BT~
@@ -684,8 +683,9 @@ func expressions(): Str {
 		Named arguments may appear anywhere; only the unnamed ones need to be in order.
 		Names must exist, must not repeat, and **once named arguments are used the call
 		must cover the full parameter list**. They are evaluated in the order written.
-		A builtin (~BT~join~BT~) and a library call (~BT~hive.math.clamp~BT~) take arguments by
-		position only.
+		A builtin and a library call take names too — ~BT~join(sep: ",", vector: v)~BT~,
+		~BT~hive.math.clamp(value: x, low: 0.0, high: 1.0)~BT~ — by the names their pages
+		give them.
 
 		### Piping a value in
 
@@ -796,10 +796,10 @@ func statements(): Str {
 		~CODE~
 
 		~BT~:=~BT~ infers the type from the value, **including a static vector length**.
-		~BT~=~BT~ with a type in front states it, and is the way to say ~BT~Str[3]~BT~ as a promise
-		rather than an observation, or to give a ~BT~hive.map.new()~BT~ somewhere to land. A
-		~BT~mut~BT~ binding's inferred length is only an observation: it may be rebound to
-		another length and ~BT~append~BT~ed to.
+		~BT~=~BT~ with a type in front states it, and is the **only** way to say ~BT~[dyn]~BT~, to
+		say ~BT~Str[3]~BT~ as a promise rather than an observation, or to give a
+		~BT~hive.map.new()~BT~ somewhere to land. Only a ~BT~[dyn]~BT~ vector grows: an inferred
+		length is a length all the same, so a ~BT~mut~BT~ one is rebound only to as many.
 
 		A name is declared **once per block** (an inner block may shadow it); ~BT~_~BT~ as often
 		as you like. A call that answers with nothing cannot be bound, and a statement
@@ -1612,13 +1612,14 @@ func builtins(): Str {
 		# Builtins
 
 		Always in scope, no import needed. Several are overloaded by argument type, so
-		a builtin is only ever called: by position, never as a value or partially applied.
+		a builtin is only ever called, never used as a value or partially applied. Its
+		arguments may be named by the names in the first column: ~BT~join(sep: ",", vector: v)~BT~.
 
 		| function | signature | what it does |
 		| --- | --- | --- |
 		| ~BT~len~BT~ | ~BT~(T[]): Int~BT~ / ~BT~(Str): Int~BT~ / ~BT~(Map<K,T>): Int~BT~ | elements / **characters** / pairs |
 		| ~BT~bytes~BT~ | ~BT~(T[]): Int~BT~ / ~BT~(Str): Int~BT~ | byte footprint / **bytes** of the UTF-8 |
-		| ~BT~append~BT~ | ~BT~(mut T[dyn], T): void~BT~ | grows a mutable vector in place |
+		| ~BT~append~BT~ | ~BT~(mut T[dyn], T): void~BT~ | grows a mutable dynamic vector in place |
 		| ~BT~prepend~BT~ | ~BT~(mut T[dyn], T): void~BT~ | the same, at the **front** |
 		| ~BT~drop~BT~ | ~BT~(mut T[dyn], Int, Int): T[dyn]~BT~ | removes ~BT~low~BT~–~BT~high~BT~ **inclusive**, hands them back |
 		| ~BT~join~BT~ | ~BT~(Str[], Str): Str~BT~ | concatenates, ~BT~sep~BT~ between elements |
@@ -1704,9 +1705,8 @@ func builtins(): Str {
 
 		## Growing and shrinking
 
-		All three write *through* a vector and all three ask for a **mutable** one whose
-		length is not a promise — ~BT~mut T[dyn]~BT~, or ~BT~mut v := [...]~BT~, whose length is only
-		inferred. ~BT~prepend~BT~ hands nothing back, so it may only stand as a
+		All three write *through* a vector and all three ask for a **mutable dynamic**
+		one (~BT~mut T[dyn]~BT~). ~BT~prepend~BT~ hands nothing back, so it may only stand as a
 		statement. ~BT~drop~BT~ removes a range, both ends inclusive, and is the one builtin
 		that makes a vector **shorter** — so it costs that vector whatever the bounds
 		pass had proved.
@@ -2159,7 +2159,8 @@ func cli(): Str {
 		## ~BT~hive container~BT~
 
 		Writes a Dockerfile into the folder it runs in — ~BT~Dockerfile~BT~, or
-		~BT~Dockerfile-hive-container~BT~ when one is already there — and says which:
+		~BT~Dockerfile-hive-container~BT~ when one is already there — and says which. A program
+		that does not compile gets its errors instead, as ~BT~hive check~BT~ would give them:
 
 		~CODE~
 		hive container main.hive

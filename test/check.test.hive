@@ -6,6 +6,7 @@
 // naming the right thing would still fail.
 import ../src/check
 import ../src/loader
+import ../src/stdlib
 import ../src/text
 
 // The first thing wrong with `source`, or `""`.
@@ -100,7 +101,7 @@ test "a constructor with the wrong number of fields is named" {
 
 test "a named argument that names no parameter is refused" {
 	got := problem("func f(a: Int): Int \{ return a }\nproc main(): void \{ echo f(b: 1) }")
-	assert got == "in `main`: `f` has no parameter called `b`"
+	assert got == "in `main`: `f` has no parameter called `b`. Its parameters are `a`"
 }
 
 test "a named argument written twice is refused" {
@@ -293,10 +294,12 @@ test "append needs a mut target" {
 	assert got == "in `main`: `append` grows a vector in place, so its target has to be `mut` — this one is not"
 }
 
-test "append grows an inferred length, and never a declared one" {
-	assert problemCount(inMain("mut v := [\"a\"]  append(v, \"b\")")) == 0
-	got := problem(inMain("mut Str[1] v = [\"a\"]  append(v, \"b\")"))
-	assert opens(got, "in `main`: `append` changes a vector's length, and `v` promises exactly 1")
+test "append needs a vector declared dynamic, because an inferred length is a promise" {
+	got := problem(inMain("mut v := [\"a\"]  append(v, \"b\")"))
+	assert opens(got, "in `main`: `append` needs a vector declared `[dyn]`, and `v` promises exactly 1")
+	assert opens(problem(inMain("mut Str[1] v = [\"a\"]  append(v, \"b\")")),
+		"in `main`: `append` needs a vector declared `[dyn]`, and `v` promises exactly 1")
+	assert problemCount(inMain("mut Str[dyn] v = [\"a\"]  append(v, \"b\")")) == 0
 }
 
 test "prepend and drop follow append's rule exactly" {
@@ -1113,10 +1116,11 @@ test "`_` throws a value away, as often as it likes" {
 	assert problemCount(one + inMain("_ := one()  _ := one()  _ := async one()")) == 0
 }
 
-test "a mut vector bound from a literal can be rebound to another length" {
-	assert problemCount(inMain("mut v := [1, 2, 3]  v = [1]  append(v, 2)  echo v")) == 0
-	assert opens(problem(inMain("mut Int[3] v = [1, 2, 3]  v = [1]")),
+test "a mut vector bound from a literal keeps the length it was bound with" {
+	assert opens(problem(inMain("mut v := [1, 2, 3]  v = [1]")),
 		"in `main`: the assignment to `v` wants Int[3] and this is Int[1]")
+	assert problemCount(inMain("mut v := [1, 2, 3]  v = [4, 5, 6]  echo v")) == 0
+	assert problemCount(inMain("mut Int[dyn] v = [1, 2, 3]  v = [1]  append(v, 2)  echo v")) == 0
 }
 
 test "the type written for a for each binding has to be the element's" {
@@ -1230,12 +1234,31 @@ test "a builtin or a library call cannot become a value" {
 		"in `main`: `hive.conv.its` cannot be partially applied")
 }
 
-test "a builtin or a library call takes its arguments by position" {
-	assert opens(problem(inMain("echo join(vector: [\"a\"], separator: \",\")")),
-		"in `main`: `join` takes its arguments by position")
-	assert opens(problem(inMain("echo hive.math.clamp(value: 3.0, low: 0.0, high: 1.0)")),
-		"in `main`: `hive.math.clamp` takes its arguments by position")
-	assert problemCount(inMain("echo hive.math.clamp(3.0, 0.0, 1.0)")) == 0
+test "a builtin or a library call takes named arguments like any callable" {
+	assert problemCount(inMain("echo join(sep: \",\", vector: [\"a\", \"b\"])")) == 0
+	assert problemCount(inMain("echo hive.join(sep: \",\", vector: [\"a\"])")) == 0
+	assert problemCount(inMain("echo hive.math.clamp(high: 1.0, value: 3.0, low: 0.0)")) == 0
+	assert problemCount(inMain("echo len(str: \"bee\")  echo len(vector: [1])  echo indexOf(sub: \"e\", str: \"bee\")")) == 0
+	assert problemCount(inMain("mut Str[dyn] v = []  append(value: \"a\", vector: v)  echo sort(values: v)")) == 0
+	// Names are still held to what the call has, and the types to their positions.
+	assert opens(problem(inMain("echo join(separator: \",\", vector: [\"a\"])")),
+		"in `main`: `join` has no parameter called `separator`. Its parameters are `vector`, `sep`")
+	assert opens(problem(inMain("echo len(list: [1])")),
+		"in `main`: `len` has no parameter called `list`. Its parameters are `vector` or `str` or `map`")
+	assert opens(problem(inMain("echo hive.math.clamp(value: 3.0, lo: 0.0, high: 1.0)")),
+		"in `main`: `hive.math.clamp` has no parameter called `lo`. Its parameters are `value`, `low`, `high`")
+	assert opens(problem(inMain("echo join(sep: 1, vector: [\"a\"])")),
+		"in `main`: the separator `join` puts between elements wants Str and this is Int")
+	assert opens(problem(inMain("echo hive.math.clamp(high: 1, value: 3.0, low: 0.0)")),
+		"in `main`: the argument `high` of `hive.math.clamp` wants Float and this is Int")
+}
+
+test "every library call has a name for each position it takes" {
+	for each call in [["term", "execWith"], ["file", "csv"], ["math", "clamp"], ["time", "dateTimeFrom"], ["map", "set"], ["ui", "line"], ["ui", "select"], ["ui", "at"], ["ui", "onInput"], ["sql", "pool"], ["net", "socketReceive"], ["crypto", "decrypt"], ["syslink", "monitor"], ["task", "sleep"], ["conv", "sti"], ["env", "get"]] {
+		if call bounds 1 {
+			assert len(stdlib.paramNamesOf(call[0], call[1])) == len(stdlib.paramsOf(call[0], call[1]))
+		}
+	}
 }
 
 // --- Queries -------------------------------------------------------------------

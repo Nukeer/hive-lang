@@ -113,6 +113,8 @@ type Compiled {
 	module: ast.Module
 	emitted: emit.Emitted
 	errors: diag.Diagnostic[dyn]
+	// The files it was flattened from, which place what a later pass reports.
+	sources: loader.Source[dyn]
 }
 
 // `from` is when the command started; every line of progress counts from it.
@@ -124,9 +126,9 @@ proc passes(entry: Str, from: Int): Compiled {
 	progress.step(from, "emitting Go")
 	emitted := emit.emitModule(made.module)
 	if len(emitted.errors) > 0 {
-		return refused(diag.allInFile(entry, emitted.errors))
+		return refused(loader.placed(loader.Program(made.module, made.sources, []), entry, emitted.errors))
 	}
-	return Compiled(made.module, emitted, [])
+	return Compiled(made.module, emitted, [], made.sources)
 }
 
 // Everything up to the emitter and no further. Split out because `hive analyze`
@@ -156,11 +158,11 @@ proc checked(entry: Str, from: Int): Compiled {
 	if len(inRange) > 0 {
 		return refused(loader.placed(program, entry, inRange))
 	}
-	return Compiled(expanded.module, emit.Emitted("", [], [], [], [], false, []), [])
+	return Compiled(expanded.module, emit.Emitted("", [], [], [], [], false, []), [], program.sources)
 }
 
 func refused(errors: diag.Diagnostic[dyn]): Compiled {
-	return Compiled(ast.Module([], [], []), emit.Emitted("", [], [], [], [], false, []), errors)
+	return Compiled(ast.Module([], [], []), emit.Emitted("", [], [], [], [], false, []), errors, [])
 }
 
 // Compile `entry` and write the Go project for it.
@@ -170,6 +172,17 @@ proc build(entry: Str, withTests: Bool, from: Int): Written {
 		return Written("", [], false, false, made.errors)
 	}
 	emitted := made.emitted
+	// The tests come first: a module only a test calls still has to be written.
+	mut Str[dyn] modules = emitted.modules
+	mut tests := ""
+	if withTests {
+		testing := emit.emitTests(made.module, emitted.atoms, emitted.codecs, emitted.modules)
+		if len(testing.errors) > 0 {
+			return Written("", [], false, false, loader.placed(loader.Program(made.module, made.sources, []), entry, testing.errors))
+		}
+		tests = testing.source
+		modules = testing.modules
+	}
 
 	directory := buildDirOf(entry)
 	// A build directory is generated whole, every time. Removing it first keeps
@@ -183,14 +196,6 @@ proc build(entry: Str, withTests: Bool, from: Int): Written {
 	put(directory, "go.mod", runtime.goMod() + "\n", written, errors)
 	put(directory, "main.go", emitted.source, written, errors)
 	put(directory + "/hive", "runtime.go", runtime.coreSource() + "\n", written, errors)
-	// The tests come first: a module only a test calls still has to be written.
-	mut Str[dyn] modules = emitted.modules
-	mut tests := ""
-	if withTests {
-		testing := emit.emitTests(made.module, emitted.atoms, emitted.codecs, emitted.modules)
-		tests = testing.source
-		modules = testing.modules
-	}
 	// A module the program never referenced is never written, so it is never
 	// compiled and never linked.
 	mut drawsAScene := false

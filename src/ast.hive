@@ -393,6 +393,68 @@ func argFor(args: Arg[], name: Str, open: Int): Expr {
 	return Expr.Absent()
 }
 
+func anyNamed(args: Arg[]): Bool {
+	for each a in args {
+		if a.name != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// Whether `name` names this parameter. A builtin that names a position
+// differently by what it is handed — `len(vector)`, `len(str)` — writes the
+// names joined by `|`.
+func namesParam(param: Str, name: Str): Bool {
+	for each one in split(param, "|") {
+		if one == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Which of `params` `name` names, or -1.
+func slotNamed(params: Str[], name: Str): Int {
+	mut i := 0
+	for each p in params {
+		if namesParam(p, name) {
+			return i
+		}
+		i = i + 1
+	}
+	return -1
+}
+
+// The arguments in parameter order, with their names gone: what a call that
+// reads its arguments by position is handed.
+func positional(args: Arg[], params: Str[]): Arg[dyn] {
+	mut Arg[dyn] out = []
+	if anyNamed(args) == false {
+		for each a in args {
+			append(out, a)
+		}
+		return out
+	}
+	mut open := 0
+	for each p in params {
+		mut found := Expr.Absent()
+		mut claimed := false
+		for each a in args {
+			if a.name != "" && namesParam(p, a.name) {
+				found = a.value
+				claimed = true
+			}
+		}
+		if claimed == false {
+			found = argFor(args, "", open)
+			open = open + 1
+		}
+		append(out, Arg("", found))
+	}
+	return out
+}
+
 // The operator a `BinOp` was written as.
 func opSpelling(op: BinOp): Str {
 	if op is BinOp.Add { return "+" }

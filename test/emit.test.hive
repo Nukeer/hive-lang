@@ -158,7 +158,8 @@ test "static, dynamic and any-length all lower to a slice" {
 // --- Operators ---------------------------------------------------------------
 
 test "+ is three operators, told apart by one type" {
-	assert has(stmt("echo 1 + 2"), "(1 + 2)")
+	assert has(stmt("echo 1 + 2"), "hive.AddInt(1, 2)")
+	assert has(stmt("x := 1.5  echo x + x"), "(x + x)")
 	assert has(stmt("echo \"a\" + \"b\""), "(\"a\" + \"b\")")
 	assert has(stmt("Int[dyn] a = []  echo a + a"), "hive.Concat(a, a)")
 }
@@ -236,7 +237,7 @@ test "main's body returns into a wait for the windows it opened" {
 
 test "a for-each is a range, and a counting loop is a for" {
 	assert has(stmt("Int[dyn] v = []  for each n in v \{ }"), "for _, n := range v \{")
-	assert has(stmt("for i := 0; i < 3; i++ \{ }"), "for i := 0; (i < 3); i = (i + 1) \{")
+	assert has(stmt("for i := 0; i < 3; i++ \{ }"), "for i := 0; (i < 3); i = hive.AddInt(i, 1) \{")
 }
 
 test "append writes the new header back, and prepend and drop take an address" {
@@ -635,6 +636,12 @@ test "a message carrying a Table is refused where its codec is derived" {
 	assert text.startsWith(got, "emit: a `Table` — `Str[dyn][dyn]` — has no JSON of its own")
 }
 
+// Which is what moves one into the module it came from.
+test "what the emitter refuses says which declaration it was in" {
+	got := go("proc main(): void \{ x := 1 }" + newline() + "proc pour(): void \{ echo hive.sql.run(5, 6) }")
+	assert got == "emit: in `pour`: `hive.sql.run` runs a `hive.sql.Fragment`, and this is Int"
+}
+
 test "a query codec writes and reads a record's fields as parameters" {
 	got := go("type Search \{ term: Str -- URL as q;\n page: Int -- Default as 1;\n tags: Str[dyn] -- URL as tag; }\nproc main(): void \{ echo encode(Search(\"a\", 1, []), hive.net.queryParamsCodec())  if Search.decode(\"q=a\", hive.net.queryParamsCodec()) is Result.Ok(s) \{ echo s.term } }")
 	assert has(got, "func queryEncode_Search(x Search) string \{")
@@ -870,4 +877,14 @@ test "Int arithmetic stops at an edge rather than wrapping" {
 	// A Float is Go's own, and a negative literal needs no helper.
 	assert has(stmt("x := 1.5  echo x + 2.0  echo -3"), "(x + 2.0)")
 	assert has(stmt("echo -3"), "-(3)")
+}
+
+test "a builtin or a library call takes its arguments by name, in the order written" {
+	side := "func side(s: Str): Str \{ return s }" + newline()
+	got := go(side + "proc main(): void \{ echo join(sep: side(\",\"), vector: [side(\"a\")]) }")
+	assert has(got, "hive.Join(_w")
+	assert has(got, "(side(\",\"), ")
+	// Nothing to reorder when every argument is a value already.
+	assert has(stmt("echo hive.math.clamp(high: 1.0, value: 3.0, low: 0.0)"), "hive.MathClamp(3.0, 0.0, 1.0)")
+	assert has(stmt("mut Str[dyn] v = []  append(value: \"a\", vector: v)"), "v = append(v, \"a\")")
 }

@@ -71,8 +71,14 @@ proc main(): void {
 	echo "{counter} {MIN - 1} {MAX * 2} {MIN * 2} {-MIN} {MIN / -1} {2 ** 100} {(-2) ** 63}"
 	echo 9223372036854775807 + 1
 
-	// Named arguments run in the order they were written.
+	// Named arguments run in the order they were written — to a builtin and to
+	// the library as well.
 	echo pair(b: side("b"), a: side("a"))
+	echo join(sep: side("-"), vector: [side("x"), "y"])
+	echo hive.math.clamp(high: 1.0, value: 3.0, low: 0.0)
+	mut Str[dyn] grown = []
+	append(value: side("appended"), vector: grown)
+	echo grown
 
 	// JSON: a key written twice keeps its last value, and text after the
 	// document is refused.

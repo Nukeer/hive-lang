@@ -31,8 +31,8 @@ A call is `callee(args)`. Every call **blocks its caller**
 
 ### Named arguments
 
-Funcs, procs, queries and type constructors — the library's own record types
-included, like `hive.net.HttpResponse` — accept arguments by name:
+Every call accepts arguments by name — funcs, procs, queries, type
+constructors, the builtins and every library call:
 
 ```hive
 f(b: 1, "s")
@@ -44,9 +44,12 @@ must not repeat, and **once named arguments are used the call must cover the
 full parameter list**. They are evaluated in the order they are written, whatever
 order the parameters come in.
 
-A builtin (`len`, `join`, …) and a library call (`hive.math.clamp`) take their
-arguments **by position only**: they have no parameter names to match, so naming
-one is a compile error.
+A builtin's parameters are called what [13](13-builtins.md) calls them, and a
+library call's what [14](14-stdlib.md) does: `join(sep: ",", vector: names)`,
+`hive.math.clamp(value: x, low: 0.0, high: 1.0)`. A builtin position that is
+overloaded by type answers to each of its names, so `len(str: s)` and
+`len(vector: v)` are both `len`. A function value is the one call whose
+parameters have no names.
 
 ### Piping a value in
 

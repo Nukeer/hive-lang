@@ -553,8 +553,9 @@ proc markCall(w: mut Written, env: infer.Env, callee: ast.Expr, args: ast.Arg[])
 	name := calleeName(callee)
 	// The four builtins that write through the vector they are given.
 	if name == "append" || name == "prepend" || name == "drop" || name == "sort" {
-		if args bounds 0 {
-			markThrough(w, env, args[0].value)
+		ordered := infer.builtinArgs(name, args)
+		if ordered bounds 0 {
+			markThrough(w, env, ordered[0].value)
 		}
 		return
 	}
@@ -565,8 +566,9 @@ proc markCall(w: mut Written, env: infer.Env, callee: ast.Expr, args: ast.Arg[])
 			if root is ast.Expr.Ident(hiveName) {
 				if hiveName == "hive" && module == "map" {
 					if called == "set" || called == "delete" {
-						if args bounds 0 {
-							markThrough(w, env, args[0].value)
+						ordered := ast.positional(args, ["m"])
+						if ordered bounds 0 {
+							markThrough(w, env, ordered[0].value)
 						}
 					}
 					return

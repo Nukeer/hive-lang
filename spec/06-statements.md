@@ -12,11 +12,11 @@ mut Str[dyn] v = expr        // annotated, reassignable
 ```
 
 `:=` infers the type from the value, **including a static vector length**. `=`
-with a type in front states it, and is the only way to say `[dyn]` on a binding
-nothing reassigns, to say `Str[3]` as a promise rather than an observation, or to
-give a `hive.map.new()` somewhere to land. A `mut` binding's inferred length is
-only an observation ([10.4](10-bounds.md#104-an-inferred-length-is-weaker)): it may
-be rebound to a vector of another length, and `append`ed to.
+with a type in front states it, and is the only way to say `[dyn]`, to say
+`Str[3]` as a promise rather than an observation, or to give a
+`hive.map.new()` somewhere to land. Only a vector declared `[dyn]` grows: an
+inferred length is a length all the same, so `mut v := ["a"]` is rebound only to
+another vector of one, and is never `append`ed to.
 
 A binding is **immutable** unless it says `mut`. An immutable name may not be
 reassigned, may not be written through (`v[i] = …`, `v.f = …`), and may not be

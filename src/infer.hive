@@ -321,7 +321,8 @@ func identCallType(env: Env, name: Str, argTypes: types.Ty[], args: ast.Arg[]): 
 		return types.Ty.TNamed(name)
 	}
 	if target is CallTarget.Builtin {
-		return builtinResult(env, name, argTypes, args)
+		ordered := builtinArgs(name, args)
+		return builtinResult(env, name, typesOfArgs(env, ordered), ordered)
 	}
 	return types.Ty.TUnknown()
 }
@@ -346,7 +347,8 @@ func memberCallType(env: Env, subject: ast.Expr, field: Str, argTypes: types.Ty[
 		}
 		// `hive.len(v)` — a builtin under its long name.
 		if head == "hive" {
-			return builtinResult(env, field, argTypes, args)
+			ordered := builtinArgs(field, args)
+			return builtinResult(env, field, typesOfArgs(env, ordered), ordered)
 		}
 	}
 	// `hive.<module>.<name>(...)`
@@ -362,7 +364,7 @@ func memberCallType(env: Env, subject: ast.Expr, field: Str, argTypes: types.Ty[
 		}
 		if root is ast.Expr.Ident(hiveName) {
 			if hiveName == "hive" {
-				return stdlib.resultOf(module, field, argTypes)
+				return stdlib.resultOf(module, field, typesOfArgs(env, stdlib.libraryArgs(module, field, args)))
 			}
 		}
 		// `hive.sql.DatabaseDriver.SQLite()` — a variant of one of the library's
@@ -633,6 +635,44 @@ func okOf(ty: types.Ty): types.Ty {
 
 // Whether `name` is one of the global builtins. Asked where a call has to be
 // told from a declaration of the same name.
+// What each position of a builtin is called, for a call that names them — the
+// names spec 13 writes its table with. An overloaded position answers to each of
+// its spellings, joined by `|`.
+func builtinParams(name: Str, arity: Int): Str[dyn] {
+	if name == "len" { return ["vector|str|map"] }
+	if name == "bytes" { return ["vector|str"] }
+	if name == "append" || name == "prepend" { return ["vector", "value"] }
+	if name == "drop" { return ["vector", "low", "high"] }
+	if name == "join" { return ["vector", "sep"] }
+	if name == "split" { return ["str", "sep"] }
+	if name == "replaceFirst" || name == "replaceAll" { return ["str", "from", "to"] }
+	if name == "indexOf" { return ["vector|str", "value|sub"] }
+	if name == "row" || name == "column" { return ["table", "key"] }
+	if name == "toTable" { return ["cells", "wide"] }
+	if name == "map" || name == "filterMap" { return ["values", "transform"] }
+	if name == "filter" { return ["values", "keep"] }
+	if name == "sort" {
+		if arity == 1 { return ["values"] }
+		return ["values", "first"]
+	}
+	if name == "encode" { return ["value", "codec"] }
+	if name == "spawn" {
+		if arity == 2 { return ["handler", "state"] }
+		return ["handler", "state", "name"]
+	}
+	if name == "at" {
+		if arity == 1 { return ["name"] }
+		return ["endpoint", "name"]
+	}
+	if name == "kill" { return ["address"] }
+	return []
+}
+
+// A builtin's arguments in parameter order, however they were written.
+func builtinArgs(name: Str, args: ast.Arg[]): ast.Arg[dyn] {
+	return ast.positional(args, builtinParams(name, len(args)))
+}
+
 func isBuiltin(name: Str): Bool {
 	return name == "len" || name == "bytes" || name == "append"
 		|| name == "prepend" || name == "drop" || name == "join"

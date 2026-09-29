@@ -1,9 +1,11 @@
 # 13 — Builtins
 
 These are always in scope — no import needed. Several are overloaded by argument
-type, which is why a builtin is only ever **called**: it takes its arguments by
-position, and neither a bare reference nor a `_` hole makes one a value. Wrap it
-in a `func` of your own to pass it around.
+type, which is why a builtin is only ever **called**: neither a bare reference
+nor a `_` hole makes one a value. Wrap it in a `func` of your own to pass it
+around. Its arguments may be named like any call's, by the names in the first
+column below; a position overloaded by type answers to each of its names, so
+`indexOf(str: s, sub: "e")` and `indexOf(vector: v, value: 3)` are both `indexOf`.
 
 | function | signature | what it does |
 | --- | --- | --- |
@@ -12,7 +14,7 @@ in a `func` of your own to pass it around.
 | `len(map)` | `len(hive.map.Map<K, T>): Int` | number of pairs |
 | `bytes(vector)` | `bytes(T[]): Int` | byte footprint of the contiguous storage |
 | `bytes(str)` | `bytes(Str): Int` | number of **bytes** in the UTF-8 encoding |
-| `append(vector, value)` | `append(T[dyn], T): void` | grows a **mutable** vector in place |
+| `append(vector, value)` | `append(T[dyn], T): void` | grows a **mutable dynamic** vector in place |
 | `prepend(vector, value)` | `prepend(T[dyn], T): void` | the same, at the **front** |
 | `drop(vector, low, high)` | `drop(T[dyn], Int, Int): T[dyn]` | removes `low`–`high` **inclusive** and hands them back |
 | `join(vector, sep)` | `join(Str[], Str): Str` | concatenates, `sep` between elements |
@@ -166,10 +168,9 @@ decision like that. To run a batch of calls together, write the
 ## Growing and shrinking: `append`, `prepend`, `drop`
 
 All three write *through* a vector rather than handing back a new one, and all
-three ask for a **mutable** vector whose length is not a promise: a `mut T[dyn]`,
-or a `mut v := [...]` binding, whose length is only inferred
-([10.4](10-bounds.md#104-an-inferred-length-is-weaker)). A length written in the
-type — `mut Str[3] v` — is kept, so growing one is a compile error.
+three ask for a **mutable dynamic** vector (`mut T[dyn]`). Dynamic has to be
+declared, because a `mut v := [...]` binding reads its length off the value and a
+length read off a value is a static one.
 
 * `prepend` is `append`'s other end and costs what that implies: every element
   moves up one, where `append` costs nothing. It hands nothing back, so it may

@@ -608,8 +608,9 @@ proc forgetSearch(bo: mut Proofs, target: ast.Expr): void {
 func searchedVector(subject: ast.Expr): Result<ast.Expr, Bool> {
 	if subject is ast.Expr.Call(callee, args) {
 		if isIndexOf(callee) && len(args) >= 1 {
-			if args bounds 0 {
-				return Result.Ok(args[0].value)
+			ordered := infer.builtinArgs("indexOf", args)
+			if ordered bounds 0 {
+				return Result.Ok(ordered[0].value)
 			}
 		}
 	}
@@ -787,9 +788,10 @@ func assignedInBlock(b: ast.Block): Str[dyn] {
 func shortenedBy(value: ast.Expr): Str[dyn] {
 	mut Str[dyn] out = []
 	if value is ast.Expr.Call(callee, args) {
-		if isNamed(callee, "drop") && len(args) >= 1 {
-			if args bounds 0 {
-				name := rootOf(args[0].value)
+		ordered := infer.builtinArgs("drop", args)
+		if isNamed(callee, "drop") && len(ordered) >= 1 {
+			if ordered bounds 0 {
+				name := rootOf(ordered[0].value)
 				if name != "" {
 					append(out, name)
 				}
@@ -884,10 +886,11 @@ proc checkExpr(bo: mut Proofs, env: infer.Env, e: ast.Expr): void {
 
 // `drop`'s bounds are proven in range exactly as a slice's are: they are the
 // same two numbers.
-proc checkDrop(bo: mut Proofs, env: infer.Env, callee: ast.Expr, args: ast.Arg[]): void {
-	if isNamed(callee, "drop") == false || len(args) != 3 {
+proc checkDrop(bo: mut Proofs, env: infer.Env, callee: ast.Expr, written: ast.Arg[]): void {
+	if isNamed(callee, "drop") == false || len(written) != 3 {
 		return
 	}
+	args := infer.builtinArgs("drop", written)
 	if args bounds 0 {
 		subject := args[0].value
 		if args bounds 1 {

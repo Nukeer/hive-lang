@@ -10,6 +10,7 @@ import ../src/container
 import ../src/loader
 import ../src/text
 import ../src/version
+import hive.file
 
 // What the command reads off a program before it writes anything.
 proc needsOf(source: Str): container.Needs {
@@ -269,4 +270,27 @@ test "the compiler the image downloads is the one that wrote the file" {
 	// And the pin is a default rather than a decree: the file says how to build
 	// with a different compiler without being edited.
 	assert says(file, "--build-arg HIVEC_VERSION=")
+}
+
+// A Dockerfile for a program that does not compile is an image build that
+// fails ten minutes later, in Docker's words rather than the compiler's.
+test "a program that does not compile gets its errors, not a Dockerfile" {
+	hive.file.write("broken.hive", "proc main(): void \{ echo 1 + \"one\" }")
+	written := container.write("broken.hive", 0)
+	assert written is Result.Error(_)
+	assert hive.file.exists("Dockerfile") == false
+	assert hive.file.exists("Dockerfile-hive-container") == false
+	if written is Result.Error(errors) {
+		for each e in errors {
+			assert e.file == "broken.hive"
+		}
+	}
+}
+
+// What is already there is somebody's, and ours may have been edited too.
+test "the file says what running the command again does" {
+	file := container.render("main.hive", container.Needs([], false, false, false))
+	assert says(file, "leaves a Dockerfile")
+	assert says(file, "writes Dockerfile-hive-container beside it")
+	assert says(file, "afresh") == false
 }

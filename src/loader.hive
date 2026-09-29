@@ -296,7 +296,8 @@ func placed(program: Program, entry: Str, ds: diag.Diagnostic[]): diag.Diagnosti
 		for each src in program.sources {
 			if src.prefix != "" && text.startsWith(message, "in `" + src.prefix) {
 				file = paths.joinPath(src.dir, paths.baseOf(src.key))
-				message = "in `" + text.span(text.chars(message), len("in `" + src.prefix), len(message) - len("in `" + src.prefix))
+				cs := text.chars(message)
+				message = "in `" + text.span(cs, len("in `" + src.prefix), len(cs) - 1)
 			}
 		}
 		for each src in program.sources {

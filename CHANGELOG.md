@@ -10,7 +10,6 @@
   * **`kill(address)`** stops a service, on this node or another.
 * **`Address`** is a builtin type, written with no module; `hive.Address` is the same type where a program declares an `Address` of its own.
 * **A `query` may answer with a `Table`**: a header row of column names, then every row as text — the one result `SELECT *` fills.
-* **A `mut` binding's inferred length can grow.** `mut v := [1]` may be `append`ed to and rebound to another length, as 10.4 always said; a length written in the type is still kept.
 * **An `Int` never wraps.** Arithmetic that would pass the largest or smallest `Int` stays at it — `MAX + 1` is `MAX`, `MIN - 1` is `MIN`, `2 ** 100` is `MAX`, and `-MIN` is `MAX` — where it wrapped around to the other end. Two literals that overflow together, `9223372036854775807 + 1`, compile too, where the Go toolchain refused them.
 * **A guard covers the rest of its own condition**: `if v bounds i && v[i] > 0` compiles, and a name a pattern binds is proved by a guard after it.
 
@@ -25,16 +24,17 @@
 * **A builtin called from an imported module is the builtin**, where the entrypoint declaring one of the same name — a test file's own `at`, say — captured the call.
 * **A dead service's name is free before anyone hears it died**, so a caller told `"Down"` can spawn under it straight away.
 * **The bounds pass is sound where it was not.** An index rebound, redeclared or shadowed by a pattern under its guard, a length lost through an assignment in a loop body, a counter moved inside its loop, and an upper bound with no lower one all compiled and could fail at run time; each now costs the proof.
+* **Builtins and library calls take named arguments** like any call, by the names specs 13 and 14 give them, and work them out in the order written: `join(sep: ",", vector: v)`, `hive.math.clamp(value: x, low: 0.0, high: 1.0)`. A builtin ignored the names and reached the Go toolchain with the arguments in the wrong places, and a library call silently took them by position.
 * **A function value fills only a slot whose calls it can take.** A `proc(Str[3]): void` passed where a `proc(Str[]): void` was wanted compiled, and failed out of range when the slot handed it one element; a callable with a sized parameter is otherwise a value like any other, its type carrying the promise.
-* **Programs the Go toolchain refused are refused by the checker**, with a message about the program: binding a call that answers with nothing; declaring a name twice in one block; an expression that is not a call standing as a statement; an operator on a type it is not defined on (`<` on vectors, `-` on strings, `==` on function values); an await-all mixing answer types; `with timeout` on a `void` call; a `for each` annotation the element does not fit; a struct that holds itself by value; `main` taking or answering anything; a builtin or library call as a value, partially applied, or given named arguments; a union field only some variants have, or an assignment into a union's field; two tests with one title.
+* **Programs the Go toolchain refused are refused by the checker**, with a message about the program: binding a call that answers with nothing; declaring a name twice in one block; an expression that is not a call standing as a statement; an operator on a type it is not defined on (`<` on vectors, `-` on strings, `==` on function values); an await-all mixing answer types; `with timeout` on a `void` call; a `for each` annotation the element does not fit; a struct that holds itself by value; `main` taking or answering anything; a builtin or library call as a value or partially applied; a union field only some variants have, or an assignment into a union's field; two tests with one title.
 * **A union value reads its shared fields**, where `event.at` failed in the Go toolchain.
 * **`sort` orders a union by its variants' declaration order**, where it left the vector as it was or panicked.
 * **A partial application captures what it was given**, where it read the variable at each call; **named arguments are evaluated in the order written**; **`_ := x` compiles**, and an `async` binding nobody reads still runs.
 * **A failed `assert` says what it asserted**, and for `==`/`!=` both sides, where it said only "assertion failed".
 * **A function that answers with a value cannot end on an `assert`.** One that holds carries on past it, so `func f(n: Int): Int { ...; assert n == 0 }` fell off its own end and crashed with "hive: unreachable" on exactly the input it asserted; it is now a compile error asking for a `return` or a `panic`. A call to `hive.term.exit`, which never returns, now closes a path the way `panic` does.
-* **An error in an imported module is reported in that module's file**, with names as the source spells them (`text.pad`, not `text_0_pad`) — in coverage too; an import that names no file is reported at the import; a file named `text-utils.hive` compiles.
-* **Errors go to standard error**, so `hive emit x.hive > main.go` never writes one into the Go; a usage error exits non-zero with `hive:` in front; every command refuses a flag it does not take.
-* **The runtime:** a `.env` beside the executable is read wherever it is started from; a CSV's byte-order mark is dropped and a separator longer than one character refused; JSON keeps a repeated key's last value in both readers and refuses text after the document; a failed `connect` is `"Connection"`; a local name nobody registered answers `"NoProc"` and a killed service `"Down"` at once, where both waited out the timeout; `listen` on a loopback host binds only loopback; `assets/` is served to any window, so `assets/font.woff2` sets it; `hive container` exposes no port for a program that serves none.
+* **An error in an imported module is reported in that module's file**, with names as the source spells them (`text.pad`, not `text_0_pad`) — from every pass, the emitter's included, and in coverage too; an import that names no file is reported at the import; a file named `text-utils.hive` compiles.
+* **Errors go to standard error**, so `hive emit x.hive > main.go` never writes one into the Go; a usage error exits non-zero with `hive:` in front; every command refuses a flag it does not take. What a running program's runtime says about itself — a service that crashed or dropped a message, a node gone down, a window that could not open — goes there too, rather than into the program's own output.
+* **The runtime:** a `.env` beside the executable is read wherever it is started from; a CSV's byte-order mark is dropped and a separator longer than one character refused; JSON keeps a repeated key's last value in both readers and refuses text after the document; a failed `connect` is `"Connection"`; a local name nobody registered answers `"NoProc"` and a killed service `"Down"` at once, where both waited out the timeout; `listen` on a loopback host binds only loopback; `assets/` is served to any window, so `assets/font.woff2` sets it; `hive container` exposes no port for a program that serves none, and writes no Dockerfile for a program that does not compile.
 
 ### Breaking
 
@@ -49,13 +49,12 @@
 | closing a window ending the program | closing the last one does |
 | an address in a message's digest as `hive.syslink.Address` | `Address`: a node built before this one does not talk to one built after |
 | a path ending in `assert` | end it in `panic` or `return` |
-| `join(vector: v, separator: ",")`, `hive.math.clamp(value: x, ...)` | positional arguments |
 | `hive.conv.its(_)`, `join(_, ",")` | a `func` of your own, partially applied |
 | `proc main(args: Str[]): Int` | `proc main(): void`, with `hive.term.args()` and `hive.term.exit(code)` |
 | `x := 1` twice in one block | `mut x`, then `x = 2` |
 | `#A + #B` | atoms do not add |
 | `Int` overflow wrapping around | it stops at `MAX` or `MIN` |
-| compile errors on standard output | on standard error |
+| compile errors, and the runtime's `hive:` notices, on standard output | on standard error |
 
 ## v0.2.9
 

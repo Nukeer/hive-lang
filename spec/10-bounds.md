@@ -91,15 +91,19 @@ three is a length it takes.
 
 ## 10.4 An inferred length is weaker
 
-Nothing constrains what comes next, so an inferred length survives a write
-*through* the name and dies the moment the name is rebound — including in a
-branch or loop body that may not even run:
+An inferred length is still the vector's length — `mut v := ["a", "b", "c"]` is
+rebound only to another three, and never grows, since only a vector declared
+`[dyn]` does. What is weaker is what the bounds pass keeps: a proof from an
+inferred length survives a write *through* the name and dies the moment the name
+is rebound — including in a branch or loop body that may not even run — where a
+declared length ([10.3](#103-a-declared-length-is-a-promise)) proves every index
+below it for as long as the name exists:
 
 ```hive
 mut v := ["a", "b", "c"]
-v[0] = "x"                  // still three
-if changed { v = ["x"] }
-echo v[2]                   // compile error: v's length is no longer known
+v[0] = "x"                        // still three, and still proved
+if changed { v = ["x", "y", "z"] }
+echo v[2]                         // compile error: v was rebound, so guard it
 ```
 
 The same applies to a field: replacing it costs whatever had been proven about

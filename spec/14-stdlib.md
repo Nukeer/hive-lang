@@ -14,8 +14,10 @@ takes and what each one is — exactly as a declared `func` is. A call that does
 not match is a compile error here, not one the Go toolchain reports later against
 a file nobody wrote. Where a position's type is the program's own business — a
 map's key, a service's message, a query's rows — nothing is claimed about *that*
-type, but the count still stands. One of a module's own types is built by naming
-its fields, so it is held to those and a named argument may come in any order.
+type, but the count still stands. Its arguments may be named, in any order, by the
+names its signature is written with below — `hive.sql.pool(driver: d, connString:
+s, maxOpen: 8, maxIdle: 1)` — and one of a module's own types is built by naming its
+fields the same way.
 A library type written down has to be one the module has: `hive.syslink.Nonesuch`
 is a compile error wherever a type is written, and so is a variant one of the
 module's enumerations does not have — `hive.ui.TextSize.Small()`.
@@ -555,7 +557,9 @@ was read from. A cast (`async inbox(m)`) discards the answer.
 
 **A crash is local to its service.** A `panic` inside a service body kills only
 that service; its monitors are told, its callers get `"Down"`, and the node keeps
-running. This is the one place `panic` does not stop the program.
+running. This is the one place `panic` does not stop the program. The node says
+so on standard error — `hive: service Counter crashed: <message>` — as it does
+for a message a service could not read, and for a peer declared down.
 
 **Every failure says which it was**, in a `SyslinkError`'s `reason`:
 
@@ -568,7 +572,7 @@ running. This is the one place `panic` does not stop the program.
 | `"Unreachable"` | the node could not be reached |
 | `"Decode"` | the message did not decode as the type the service takes |
 | `"NoPeer"` | the address names no node to send to |
-| `"NoListener"` | `listen` could not listen where it was told |
+| `"NoListener"` | `listen` could not listen where it was told, or this node has not listened and was asked to reach another |
 | `"NoKey"` | there is no cluster key to authenticate with |
 
 **On the wire.** One persistent, multiplexed connection per node *pair*, carrying

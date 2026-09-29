@@ -1432,7 +1432,8 @@ func syslink(): Str {
 
 		A ~BT~panic~BT~ inside a service body **kills only that service**: its monitors are
 		told, its callers get ~BT~"Down"~BT~, and the node keeps running. **This is the one
-		place ~BT~panic~BT~ does not stop the program.**
+		place ~BT~panic~BT~ does not stop the program.** The node says so on standard error,
+		as ~BT~hive: service Counter crashed: <message>~BT~.
 
 		## A service that knows its own address
 
@@ -1497,7 +1498,7 @@ func syslinkCalls(): Str {
 		| ~BT~"Unreachable"~BT~ | the node could not be reached |
 		| ~BT~"Decode"~BT~ | the message did not decode as the type the service takes |
 		| ~BT~"NoPeer"~BT~ | the address names no node to send to |
-		| ~BT~"NoListener"~BT~ | ~BT~listen~BT~ could not listen where it was told |
+		| ~BT~"NoListener"~BT~ | ~BT~listen~BT~ could not listen where it was told, or this node has not listened and was asked to reach another |
 		| ~BT~"NoKey"~BT~ | there is no cluster key to authenticate with |
 
 		## An address is called

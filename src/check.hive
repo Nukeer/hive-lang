@@ -808,7 +808,7 @@ proc restore(c: mut Check, mark: Int): void {
 proc checkStmt(c: mut Check, env: infer.Env, s: ast.Stmt): infer.Env {
 	if s is ast.Stmt.VarDecl(name, value, mutable, deferred) {
 		checkExpr(c, env, value)
-		mut ty := infer.typeOf(env, value)
+		ty := infer.typeOf(env, value)
 		// `hive.map.new()` says empty and nothing about what it holds, so it has
 		// to land somewhere that says.
 		if isEmptyMap(value) {
@@ -818,12 +818,6 @@ proc checkStmt(c: mut Check, env: infer.Env, s: ast.Stmt): infer.Env {
 		declareName(c, name)
 		if mutable {
 			append(c.mutable, name)
-			// A length read off the value is observed rather than promised
-			// (10.4): a `mut` name may be rebound to any length, and so may
-			// never fill a slot that promises one.
-			if ty is types.Ty.TVec(element, dim) && dim is ast.Dim.Fixed(_) {
-				ty = types.Ty.TVec(element, ast.Dim.Dynamic())
-			}
 		}
 		return infer.bound(env, name, ty)
 	} else if s is ast.Stmt.TypedDecl(declared, name, value, mutable, deferred) {
@@ -1546,36 +1540,47 @@ proc checkMutexArgument(c: mut Check, shown: Str, param: Str, found: ast.Expr, p
 // Without it the mismatch reaches the Go toolchain, which reports it in terms of
 // Go's own types — and a message that only said `float64` would leave the reader
 // hunting for a conversion nobody mentioned.
-proc checkLibraryArguments(c: mut Check, env: infer.Env, module: Str, name: Str, args: ast.Arg[]): void {
+proc checkLibraryArguments(c: mut Check, env: infer.Env, module: Str, name: Str, written: ast.Arg[]): void {
+	// One of the library's own types being built takes its fields, matched by
+	// name the way a declared type's are.
+	fields := stdlib.fieldsOf(module, name)
+	if len(fields) > 0 {
+		checkFieldArguments(c, env, "hive.{module}.{name}", fields, written)
+		return
+	}
+	if refusesHoles(c, "`hive.{module}.{name}`", written) {
+		return
+	}
+	if checkArgumentNames(c, "hive.{module}.{name}", stdlib.paramNamesOf(module, name), written) == false {
+		return
+	}
+	args := stdlib.libraryArgs(module, name, written)
 	if module == "sql" && name == "run" {
 		checkRunsQuery(c, env, args)
 	}
 	if module == "ui" && name == "window" && len(args) == 3 {
 		checkWindow(c, env, ast.argFor(args, "", 1), ast.argFor(args, "", 2))
 	}
-	// One of the library's own types being built takes its fields, matched by
-	// name the way a declared type's are.
-	fields := stdlib.fieldsOf(module, name)
-	if len(fields) > 0 {
-		checkFieldArguments(c, env, "hive.{module}.{name}", fields, args)
-		return
-	}
-	if refusesNotCallable(c, "`hive.{module}.{name}`", args) {
-		return
-	}
 	if stdlib.signatureOf(module, name) is Result.Ok(wanted) {
 		if len(args) != len(wanted) {
 			report(c, "`hive.{module}.{name}` takes " + countOf(len(wanted)) + ", and this call passes " + countOf(len(args)))
 			return
 		}
+		names := stdlib.paramNamesOf(module, name)
+		named := ast.anyNamed(written)
 		mut i := 0
 		for each a in args {
 			if a.value is ast.Expr.Hole {
 				i = i + 1
 				continue
 			}
+			// A call that named its arguments is told about them by name.
+			mut which := "the " + nth(i) + " argument"
+			if named && names bounds i {
+				which = "the argument `" + names[i] + "`"
+			}
 			if wanted bounds i {
-				fits(c, wanted[i], infer.typeOf(env, a.value), "the " + nth(i) + " argument of `hive.{module}.{name}`")
+				fits(c, wanted[i], infer.typeOf(env, a.value), which + " of `hive.{module}.{name}`")
 			}
 			i = i + 1
 		}
@@ -1730,14 +1735,8 @@ proc checkArguments(c: mut Check, env: infer.Env, name: Str, info: types.Callabl
 	}
 }
 
-// Neither has parameter names to match nor a signature a function value could carry.
-proc refusesNotCallable(c: mut Check, shown: Str, args: ast.Arg[]): Bool {
-	for each a in args {
-		if a.name != "" {
-			report(c, shown + " takes its arguments by position: only your own callables and constructors have parameter names to match, so `{a.name}:` has to go")
-			return true
-		}
-	}
+// Neither has a signature a function value could carry.
+proc refusesHoles(c: mut Check, shown: Str, args: ast.Arg[]): Bool {
 	if hasHole(args) {
 		report(c, shown + " cannot be partially applied: a `_` makes a function value, and a builtin or a library call cannot become one. Wrap it in a `func` of your own, and partially apply that")
 		return true
@@ -1779,28 +1778,41 @@ proc checkFieldArguments(c: mut Check, env: infer.Env, name: Str, fields: ast.Fi
 // order. Names must exist, must not repeat, and once named arguments are used
 // the call must cover the full parameter list.
 proc checkArgumentNames(c: mut Check, name: Str, parameters: Str[], args: ast.Arg[]): Bool {
-	mut Str[dyn] seen = []
+	mut Int[dyn] seen = []
 	mut named := false
 	for each a in args {
 		if a.name == "" {
 			continue
 		}
 		named = true
-		if indexOf(parameters, a.name) is Result.Error(_) {
-			report(c, "`{name}` has no parameter called `" + a.name + "`")
+		slot := ast.slotNamed(parameters, a.name)
+		if slot < 0 {
+			report(c, "`{name}` has no parameter called `" + a.name + "`" + parameterList(parameters))
 			return false
 		}
-		if indexOf(seen, a.name) is Result.Ok(_) {
+		if indexOf(seen, slot) is Result.Ok(_) {
 			report(c, "this call names `" + a.name + "` twice")
 			return false
 		}
-		append(seen, a.name)
+		append(seen, slot)
 	}
 	if named && len(args) != len(parameters) {
 		report(c, "once a call uses named arguments it has to cover the full parameter list, and `{name}` has " + countOf(len(parameters)))
 		return false
 	}
 	return true
+}
+
+// The names a call could have used, for a message about one it could not.
+func parameterList(parameters: Str[]): Str {
+	if len(parameters) == 0 {
+		return ": it takes no arguments"
+	}
+	mut Str[dyn] shown = []
+	for each p in parameters {
+		append(shown, "`" + join(split(p, "|"), "` or `") + "`")
+	}
+	return ". Its parameters are " + join(shown, ", ")
 }
 
 func namesOfParams(params: ast.Param[]): Str[dyn] {
@@ -1850,10 +1862,14 @@ func fieldCount(n: Int): Str {
 // Every builtin has a signature ([13](../spec/13-builtins.md)), and a call that
 // does not match one is a compile error. Caught here rather than left to the
 // generated Go, whose message would be about Go's types and a file nobody wrote.
-proc checkBuiltinCall(c: mut Check, env: infer.Env, name: Str, args: ast.Arg[]): void {
-	if refusesNotCallable(c, "`{name}`", args) {
+proc checkBuiltinCall(c: mut Check, env: infer.Env, name: Str, written: ast.Arg[]): void {
+	if refusesHoles(c, "`{name}`", written) {
 		return
 	}
+	if checkArgumentNames(c, name, infer.builtinParams(name, len(written)), written) == false {
+		return
+	}
+	args := infer.builtinArgs(name, written)
 	if name == "append" || name == "prepend" {
 		checkGrows(c, env, name, args, 2)
 		// What goes in has to be what the vector holds.
@@ -2134,8 +2150,8 @@ func typeAt(list: types.Ty[], index: Int): types.Ty {
 }
 
 // `append`, `prepend` and `drop` all write *through* a vector and all ask for a
-// mutable one whose length is not a promise: a `mut x := [...]` binding's length
-// is only inferred (10.4), while a declared one is kept (10.3).
+// mutable dynamic one. Dynamic has to be declared: a `:=` binding reads its
+// length off the value, and that is a static length it cannot grow out of.
 proc checkGrows(c: mut Check, env: infer.Env, name: Str, args: ast.Arg[], wanted: Int): void {
 	if len(args) != wanted {
 		report(c, "`{name}` takes " + countOf(wanted) + ", and this call passes " + countOf(len(args)))
@@ -2150,7 +2166,7 @@ proc checkGrows(c: mut Check, env: infer.Env, name: Str, args: ast.Arg[], wanted
 	ty := infer.typeOf(env, target)
 	if ty is types.Ty.TVec(_, dim) {
 		if dim is ast.Dim.Fixed(size) {
-			report(c, "`{name}` changes a vector's length, and `{root}` promises exactly {size}: a length written in the type is kept. Declare it `[dyn]`, or bind it with `mut {root} := ...` and let the length be inferred")
+			report(c, "`{name}` needs a vector declared `[dyn]`, and `{root}` promises exactly {size}. A `:=` binding reads its length off the value, and a length read off a value is a promise it cannot grow out of — declare it `mut T[dyn]`")
 		}
 		return
 	}
@@ -2182,7 +2198,7 @@ proc checkStatementExpr(c: mut Check, env: infer.Env, value: ast.Expr): void {
 			}
 		}
 		if name == "sort" && infer.isBound(env, name) == false && len(args) >= 1 {
-			target := ast.argFor(args, "", 0)
+			target := ast.argFor(infer.builtinArgs("sort", args), "", 0)
 			root := rootName(target)
 			if root == "" {
 				report(c, "a `sort` written as a statement throws away the vector it answers with, so it only means something when it can sort in place — and there is nothing here to sort in place. Keep the answer instead")
