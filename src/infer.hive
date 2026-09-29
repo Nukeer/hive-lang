@@ -287,10 +287,9 @@ func callType(env: Env, callee: ast.Expr, args: ast.Arg[]): types.Ty {
 	if hasHole(args) {
 		return partialType(env, callee, args)
 	}
-	// Calling an address is a request, and the one place in `hive.syslink` that
-	// reports failure — because it is the only one with somewhere to report to.
-	// A service answers with one of its own messages, so what comes back is
-	// whatever its mailbox holds.
+	// Calling an address is a request, which reports failure because it has
+	// somewhere to report to. A service answers with one of its own messages, so
+	// what comes back is whatever its mailbox holds.
 	if isAddressType(typeOf(env, callee)) {
 		return sendResult(env, args)
 	}
@@ -399,10 +398,7 @@ func isSendExpr(env: Env, e: ast.Expr): Bool {
 }
 
 func isAddressType(ty: types.Ty): Bool {
-	if ty is types.Ty.TLib(module, name) {
-		return module == "syslink" && name == "Address"
-	}
-	return false
+	return ty is types.Ty.TAddress
 }
 
 func resultConstructor(variant: Str, argTypes: types.Ty[]): types.Ty {
@@ -615,6 +611,16 @@ func builtinResult(env: Env, name: Str, argTypes: types.Ty[], args: ast.Arg[]): 
 	if name == "filterMap" {
 		return types.Ty.TVec(okOf(resultOfFn(typeAt(argTypes, 1))), ast.Dim.Dynamic())
 	}
+	// Either form of `spawn` answers a Result, since a name may be taken.
+	if name == "spawn" {
+		return types.Ty.TResult(types.Ty.TAddress(), types.Ty.TLib("syslink", "SyslinkError"))
+	}
+	if name == "at" {
+		return types.Ty.TAddress()
+	}
+	if name == "kill" {
+		return types.Ty.TVoid()
+	}
 	return types.Ty.TUnknown()
 }
 
@@ -635,7 +641,7 @@ func isBuiltin(name: Str): Bool {
 		|| name == "map" || name == "filter"
 		|| name == "filterMap" || name == "sort"
 		|| name == "replaceFirst" || name == "replaceAll"
-		|| name == "encode"
+		|| name == "encode" || name == "spawn" || name == "at" || name == "kill"
 }
 
 // --- Patterns ----------------------------------------------------------------

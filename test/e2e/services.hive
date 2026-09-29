@@ -1,0 +1,62 @@
+// `spawn`, with and without a name, `at` and `kill`.
+type Op {
+	Add { n: Int }
+	Total { n: Int }
+	Who
+	Named { me: Str }
+}
+
+proc counter(total: mut Int, op: Op): Op {
+	if op is Op.Add(n) {
+		total += n
+	}
+	return Op.Total(total)
+}
+
+proc self(seen: mut Int, op: Op, me: Address): Op {
+	seen += 1
+	return Op.Named("{me}")
+}
+
+proc totalOf(box: Address, op: Op): Str {
+	answer := box(op)
+	if answer is Result.Ok(reply) && reply is Op.Total(n) {
+		return "{n}"
+	}
+	if answer is Result.Error(problem) {
+		return "no answer: {problem.reason}"
+	}
+	return "?"
+}
+
+proc main(): void {
+	if spawn(counter, 10) is Result.Ok(box) {
+		echo totalOf(box, Op.Add(5))
+		kill(box)
+	}
+
+	started := spawn(counter, 0, #Counter)
+	if started is Result.Error(problem) {
+		echo "could not start: {problem.reason}"
+	}
+	echo totalOf(at(#Counter), Op.Add(2))
+	echo totalOf(at(#Counter), Op.Add(3))
+
+	if spawn(counter, 100, #Counter) is Result.Error(problem) {
+		echo "second #Counter: {problem.reason}"
+	}
+
+	kill(at(#Counter))
+	if at(#Counter)(Op.Add(1)) is Result.Error(_) {
+		echo "killed, and nothing answers"
+	}
+	if spawn(counter, 100, #Counter) is Result.Ok(_) {
+		echo totalOf(at(#Counter), Op.Add(1))
+	}
+
+	if spawn(self, 0, #Self) is Result.Ok(box) {
+		if box(Op.Who()) is Result.Ok(reply) && reply is Op.Named(me) {
+			echo me
+		}
+	}
+}

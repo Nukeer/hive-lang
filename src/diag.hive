@@ -5,8 +5,8 @@
 //
 // A diagnostic is a value, not a thing that stops the compiler: a pass collects
 // as many as it can find and hands them all back. Passes after the parser run on
-// a flattened program whose nodes carry no position, so they report against the
-// entrypoint's first line and name the declaration instead.
+// a flattened program whose nodes carry no position, so they name the
+// declaration, which is what `loader.placed` finds the file by.
 
 type Diagnostic {
 	file: Str

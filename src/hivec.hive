@@ -40,11 +40,17 @@ proc main(): void {
 		document(rest(args, 1))
 		return
 	}
-	if len(args) < 2 {
+	if len(args) == 0 {
 		usage()
 		return
 	}
 	command := at(args, 0)
+	if isCommand(command) == false {
+		refuse("`{command}` is not a command. `hive` alone lists the ones there are.")
+	}
+	if len(args) < 2 {
+		refuse("`hive {command}` needs an entrypoint: `hive {command} <entrypoint.hive>`.")
+	}
 	// The one path that comes from a shell rather than from Hive source. Left as
 	// typed, `src\hivec.hive` holds no `/` at all, so every import resolves
 	// against the folder the command ran in.
@@ -58,9 +64,12 @@ proc main(): void {
 	// and `run` hands everything past the entrypoint to the program.
 	if command != "build" && command != "export" && command != "run" {
 		if mentions(rest(args, 2), "--target") {
-			echo "hive: `--target` is a flag of `hive build` and `hive export`. `{command}` builds nothing for another platform."
-			hive.term.exit(1)
+			refuse("`--target` is a flag of `hive build` and `hive export`. `{command}` builds nothing for another platform.")
 		}
+	}
+	// Something typed and then ignored is a command that quietly disobeyed.
+	if command != "build" && command != "export" && command != "run" && len(args) > 2 {
+		refuse("`hive {command}` takes an entrypoint and nothing else. `" + at(args, 2) + "` was given to it.")
 	}
 
 	if command == "check" {
@@ -76,14 +85,14 @@ proc main(): void {
 	} else if command == "test" {
 		suite(entry, from)
 	} else if command == "analyze" {
-		score(entry, rest(args, 2), from)
+		score(entry, from)
 	} else if command == "container" {
 		dockerfile(entry, from)
-	} else {
-		echo "hive: `{command}` is not a command"
-		usage()
-		hive.term.exit(1)
 	}
+}
+
+func isCommand(command: Str): Bool {
+	return indexOf(["check", "emit", "build", "export", "run", "test", "analyze", "container"], command) is Result.Ok(_)
 }
 
 // --- The commands ------------------------------------------------------------
@@ -101,10 +110,9 @@ proc emit(entry: Str, from: Int): void {
 }
 
 proc build(entry: Str, flags: Str[], from: Int): void {
-	asked := askedFor(flags)
+	asked := askedFor("build", flags)
 	if asked.error != "" {
-		echo "hive: " + asked.error
-		hive.term.exit(1)
+		refuse(asked.error)
 	}
 	// A platform the toolchain cannot build for is a mistake in what was typed
 	// rather than in the program, so it is said now rather than after a whole
@@ -117,8 +125,7 @@ proc build(entry: Str, flags: Str[], from: Int): void {
 		}
 		if known is Result.Ok(builds) {
 			if builds == false {
-				echo "hive: `--target " + asked.target + "` is not a platform the Go toolchain builds for. A target is a `goos/goarch` pair — `linux/arm64`, `darwin/arm64`, `windows/amd64` — and `go tool dist list` names every one it knows."
-				hive.term.exit(1)
+				refuse("`--target " + asked.target + "` is not a platform the Go toolchain builds for. A target is a `goos/goarch` pair — `linux/arm64`, `darwin/arm64`, `windows/amd64` — and `go tool dist list` names every one it knows.")
 			}
 		}
 	}
@@ -136,18 +143,15 @@ proc build(entry: Str, flags: Str[], from: Int): void {
 // is Android's, and the target is asked for rather than assumed: another format
 // would make a default mean something else.
 proc export(entry: Str, flags: Str[], from: Int): void {
-	asked := askedFor(flags)
+	asked := askedFor("export", flags)
 	if asked.error != "" {
-		echo "hive: " + asked.error
-		hive.term.exit(1)
+		refuse(asked.error)
 	}
 	if asked.target == "" {
-		echo "hive: `hive export` needs a target, and the one it knows is `--target android/arm64`."
-		hive.term.exit(1)
+		refuse("`hive export` needs a target, and the one it knows is `--target android/arm64`.")
 	}
 	if asked.target != "android/arm64" {
-		echo refusalOf(asked.target)
-		hive.term.exit(1)
+		refuse(refusalOf(asked.target))
 	}
 	written := project.export(entry, asked.target, from)
 	if len(written.errors) > 0 {
@@ -162,9 +166,9 @@ proc export(entry: Str, flags: Str[], from: Int): void {
 // reasonably expect to work.
 func refusalOf(target: Str): Str {
 	if target == "android/386" || target == "android/amd64" || target == "android/arm" {
-		return "hive: `--target {target}` needs a C cross-compiler, which is the one thing a machine with the Go toolchain on it cannot be assumed to have. `android/arm64` is the only Android target Go links on its own, and it is what a handset is."
+		return "`--target {target}` needs a C cross-compiler, which is the one thing a machine with the Go toolchain on it cannot be assumed to have. `android/arm64` is the only Android target Go links on its own, and it is what a handset is."
 	}
-	return "hive: `hive export` knows one format, and it is Android's. It takes `--target android/arm64`; `{target}` has no app to be packaged into."
+	return "`hive export` knows one format, and it is Android's. It takes `--target android/arm64`; `{target}` has no app to be packaged into."
 }
 
 proc run(entry: Str, args: Str[], from: Int): void {
@@ -203,12 +207,7 @@ proc suite(entry: Str, from: Int): void {
 // A score per `proc` and `func`, the copies and loops behind it, and an HTML page
 // beside the entrypoint. Everything found goes on the page; what it prints is the
 // part worth reading without opening one.
-proc score(entry: Str, flags: Str[], from: Int): void {
-	wrong := analyzeRefusal(flags)
-	if wrong != "" {
-		echo "hive: " + wrong
-		hive.term.exit(1)
-	}
+proc score(entry: Str, from: Int): void {
 	answered := project.analyse(entry, from)
 	if answered is Result.Error(errors) {
 		complain(errors)
@@ -219,15 +218,6 @@ proc score(entry: Str, flags: Str[], from: Int): void {
 			echo line
 		}
 	}
-}
-
-// Why whatever followed the entrypoint cannot be used, or `""`. It takes no
-// flags, and something typed and then ignored is a command that quietly disobeyed.
-func analyzeRefusal(flags: Str[]): Str {
-	if len(flags) > 0 {
-		return "`hive analyze` takes an entrypoint and nothing else. `" + at(flags, 0) + "` was given to it."
-	}
-	return ""
 }
 
 // Writes a Dockerfile that builds this program and runs it, into the folder the
@@ -249,8 +239,7 @@ proc dockerfile(entry: Str, from: Int): void {
 proc document(args: Str[]): void {
 	wrong := agents.refusal(args)
 	if wrong != "" {
-		echo "hive: " + wrong
-		hive.term.exit(1)
+		refuse(wrong)
 	}
 	written := agents.write()
 	if written is Result.Error(errors) {
@@ -270,8 +259,7 @@ proc document(args: Str[]): void {
 proc release(args: Str[]): void {
 	wrong := versionRefusal(args)
 	if wrong != "" {
-		echo "hive: " + wrong
-		hive.term.exit(1)
+		refuse(wrong)
 	}
 	echo version.current()
 }
@@ -298,11 +286,19 @@ proc report(errors: diag.Diagnostic[], quiet: Str, from: Int): void {
 
 // A compile error is printed exactly as the compiler wrote it: it opens with
 // `file:line:`, which is what lets an editor jump to it, and putting anything in
-// front of that would break it.
+// front of that would break it. Standard error, so `hive emit x.hive > main.go`
+// never writes one into the Go.
 proc complain(errors: diag.Diagnostic[]): void {
 	for each e in errors {
-		echo diag.render(e)
+		hive.term.status(diag.render(e))
 	}
+	hive.term.exit(1)
+}
+
+// A mistake in what was typed rather than in any source, so it says who is
+// complaining.
+proc refuse(why: Str): void {
+	hive.term.status("hive: " + why)
 	hive.term.exit(1)
 }
 
@@ -338,7 +334,7 @@ type Asked {
 // `--target linux/arm64` and `--target=linux/arm64` are one flag spelled two
 // ways. Anything else is refused rather than skipped: a flag a build ignored
 // is a build that did something other than what it was told, and said nothing.
-func askedFor(flags: Str[]): Asked {
+func askedFor(command: Str, flags: Str[]): Asked {
 	mut target := ""
 	mut wants := false
 	for each flag in flags {
@@ -350,13 +346,13 @@ func askedFor(flags: Str[]): Asked {
 		} else if text.startsWith(flag, "--target=") {
 			target = text.span(text.chars(flag), len("--target="), len(flag) - 1)
 		} else {
-			return Asked("", "`" + flag + "` is not something `hive build` takes. The one flag here is `--target <goos>/<goarch>`.")
+			return Asked("", "`" + flag + "` is not something `hive {command}` takes. The one flag here is `--target <goos>/<goarch>`.")
 		}
 	}
 	// `--target` with the platform left off, and `--target=` with it left empty,
 	// are the same mistake and get the same answer.
 	if wants || (len(flags) > 0 && target == "") {
-		return Asked("", "`--target` was given no platform to build for. It takes a `goos/goarch` pair — `hive build <entrypoint.hive> --target linux/arm64`.")
+		return Asked("", "`--target` was given no platform to build for. It takes a `goos/goarch` pair — `hive {command} <entrypoint.hive> --target linux/arm64`.")
 	}
 	return Asked(target, "")
 }

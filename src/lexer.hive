@@ -174,7 +174,11 @@ proc scanOperator(cs: Str[], s: mut Scan): void {
 	// `!` standing on its own — the negation.
 	else if one == "!" { take(s, token.Kind.Bang(), 1) return }
 
-	fail(s, "unexpected character `{one}`")
+	if s.pos == 0 && bytes(one) == 3 {
+		fail(s, "the file opens with `{one}`, which Hive source cannot hold. If nothing shows between those quotes it is a byte-order mark: save the file as \"UTF-8\" rather than \"UTF-8 with BOM\"")
+	} else {
+		fail(s, "unexpected character `{one}`")
+	}
 	s.pos = s.pos + 1
 }
 

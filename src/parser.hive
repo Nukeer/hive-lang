@@ -1224,6 +1224,7 @@ proc parseFor(ts: token.Token[], p: mut Parse): ast.Stmt {
 	mut ast.Stmt post = ast.Stmt.Nothing()
 	if kindAt(ts, p.pos) != token.Kind.LBrace() {
 		post = parseStmt(ts, p)
+		refuseClauseAsync(ts, p, post, "post")
 	}
 	return ast.Stmt.ForLoop(init, cond, post, parseBlock(ts, p))
 }
@@ -1241,7 +1242,14 @@ proc asCounter(ts: token.Token[], p: mut Parse, s: ast.Stmt): ast.Stmt {
 		checkCounterName(ts, p, name)
 		return ast.Stmt.TypedDecl(declared, name, value, true, deferred)
 	}
+	refuseClauseAsync(ts, p, s, "init")
 	return s
+}
+
+proc refuseClauseAsync(ts: token.Token[], p: mut Parse, s: ast.Stmt, clause: Str): void {
+	if s is ast.Stmt.AsyncStmt(_) {
+		fail(ts, p, "a loop's {clause} clause cannot be an `async` statement: it is there to set up and advance the condition, and work running on another thread has nothing to advance it with")
+	}
 }
 
 proc checkCounterName(ts: token.Token[], p: mut Parse, name: Str): void {

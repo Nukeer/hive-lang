@@ -195,8 +195,8 @@ test "a program that listens on nothing publishes nothing" {
 			echo "hello"
 		}
 	`)
-	assert says(file, "\nEXPOSE 8080\n")
-	assert says(file, "Nothing in this program opens a port")
+	assert says(file, "EXPOSE") == false
+	assert says(file, "Nothing in this program opens a port, so nothing is exposed")
 	assert says(file, "docker run --rm main")
 }
 

@@ -1,9 +1,9 @@
 # 14 — Standard library
 
 Each module owns its types under its own namespace — `hive.net.HttpRequest`,
-`hive.json.JsonError`, `hive.map.Map`, `hive.syslink.Address`. The only builtin
-types that live directly on `hive` are the core ones the language uses without a
-module: `Result` and `Table`.
+`hive.json.JsonError`, `hive.map.Map`, `hive.syslink.SyslinkError`. The only
+builtin types that live directly on `hive` are the core ones the language uses
+without a module: `Result`, `Table` and `Address`.
 
 A module reached often can be given a short name with `import`
 ([12](12-modules.md#126-importing-a-standard-library-module)). It is a spelling
@@ -254,7 +254,13 @@ hive.sql.raw(db, someSqlText)        // SQL built at run time, a Table
 
 **The separator is always written.** There are no optional parameters in Hive,
 and a comma is a choice like any other rather than the one the language makes on
-your behalf.
+your behalf. It is one character; a longer one is a `TableError` rather than a
+quiet reading of its first.
+
+A CSV is read as it is: a quoted field may hold the separator, a newline or a
+doubled `""`; blank lines are skipped; and rows keep the length they have, so a
+ragged file is a `Table` with ragged rows. A byte-order mark at the start — what a
+spreadsheet often writes — is dropped rather than left on the first cell.
 
 A CSV is a single table, so it comes back as one `Table`. A **spreadsheet holds
 many**, so xlsx and ods come back as a `Table[dyn]` — one per sheet, in document
@@ -291,6 +297,9 @@ Built on the idea that Hive's type declarations *are* the JSON schema.
   its own.
 * `decode` is therefore a **reserved field name**: a type declaring one would
   make `T.Variant.decode` mean two things at once.
+* A key written twice in one object keeps its **last** value, for a declared type
+  and a `JsonValue` alike. A document is the whole of the text: anything after it
+  but whitespace is an error, `expected` "the end of the document".
 
 Encoding is **not here** either: it derives from a declaration rather than being
 carried by any module, so it is the builtin `encode(value, codec)`
@@ -468,7 +477,20 @@ A `WsError`'s `reason` is `"Handshake"`, `"Protocol"`, `"Closed"`, `"Send"` or
 
 Addressable **services**, in this process or on another machine, reached by the
 same statement either way. A service is long-lived, owns private state only it
-can touch, and has an identity you can pass around.
+can touch, and has an identity you can pass around: an
+[`Address`](03-types.md#310-address).
+
+A service is started, named and stopped by three builtins —
+[`spawn`, `at` and `kill`](13-builtins.md#services-spawn-at-kill) — so that
+much of it is the language's own. What is left in the module is the node: where
+it listens, who it is connected to, and being told when a service dies.
+
+```hive
+started := spawn(counter, 0, #Counter)   // Result<Address, SyslinkError>
+here    := at(#Counter)                  // this node
+there   := at("10.0.0.4:9000", #Counter) // another
+kill(here)
+```
 
 **The handler is one turn** — `proc (state: mut State, message: Message): Message`.
 It writes its state in place and **returns the answer**. The state is a mutex
@@ -487,7 +509,9 @@ proc counter(total: mut Int, op: Op): Op {
 
 The compiler holds a handler to that shape where the service is started: the
 first parameter takes the mutex, the second is the mailbox type, the return type
-is the mailbox type too, and the starting state fits the first parameter.
+is the mailbox type too, and the starting state fits the first parameter. A
+handler may take a third parameter, an `Address`, and is then handed its own
+address every turn — to give to work it starts. `spawn` takes either shape.
 
 **An address is called.** There is exactly one way to reach a service, and — as
 with a func — the call site decides what it means:
@@ -503,17 +527,11 @@ both   := await [a(m), b(m)]         // one barrier, one deadline
 The reply type **is the mailbox type**, so nothing is annotated: a service answers
 with one of its own messages, which makes a mailbox type the whole protocol.
 
-* `spawn(handler, state)` starts a service and returns its address.
-* `spawnAddressed(handler, state)` starts one whose handler is also handed its own
-  address every turn — `proc (mut State, Message, hive.syslink.Address): Message` —
-  to register itself or give to work it starts.
-* `register(name, address)` publishes it under an atom → `"Taken"` if in use.
-* `at(name)` is that service on this node; `on(endpoint, name)` the same service
-  on another. Both perform **no I/O and cannot fail** — they are address
-  construction, not a lookup.
+What the module has:
+
 * `monitor(watcher, target, notice)` posts `notice` to `watcher` — a service on
   this node — when `target` dies; an already-dead target reports at once.
-* `stop(address)`, `listen(endpoint)`, `node()`, `peers()`.
+* `listen(endpoint)`, `node()`, `peers()`.
 
 **`listen` answers with the endpoint a peer should dial**, which is not always the
 one it was given: a port of `0` asks the kernel to choose, and what comes back —
@@ -521,12 +539,15 @@ and what `node()` reports from then on — carries the number it chose. A node i
 identified by where it can be reached, so `":0"` is not something a peer could be
 told. The host is left exactly as written: which address this machine advertises
 is the program's to answer, with [`hive.net.localAddress`](#149-hivenet), and not
-something a listener should guess.
+something a listener should guess. The port is bound on **every interface** —
+the advertised host may be one a router forwards to rather than one this machine
+holds — except a loopback host (`127.0.0.1`, `localhost`, `::1`), which is bound as
+written, since nothing off this machine could dial it anyway.
 
-**A service name is an atom**, which is what lets the compiler know the whole
-registry, and a named address is the only kind that **survives its service being
-restarted**. A **node has no name**: it is identified by the endpoint it can be
-dialed at, so a peer list is ordinary runtime data.
+**A service name is an atom**, given when it is spawned, and a named address is
+the only kind that **survives its service being restarted**. A **node has no
+name**: it is identified by the endpoint it can be dialed at, so a peer list is
+ordinary runtime data.
 
 **Every request is answered** with what its turn returned, and a caller on this
 node is handed its own copy, since the next turn may write the state the answer
@@ -535,6 +556,20 @@ was read from. A cast (`async inbox(m)`) discards the answer.
 **A crash is local to its service.** A `panic` inside a service body kills only
 that service; its monitors are told, its callers get `"Down"`, and the node keeps
 running. This is the one place `panic` does not stop the program.
+
+**Every failure says which it was**, in a `SyslinkError`'s `reason`:
+
+| reason | what happened |
+| --- | --- |
+| `"Taken"` | `spawn` was given a name another service holds |
+| `"Down"` | the service died before answering, or was already gone — answered at once |
+| `"NoProc"` | no service is registered under that name on the node asked |
+| `"Timeout"` | the answer did not come within the time given, or the default |
+| `"Unreachable"` | the node could not be reached |
+| `"Decode"` | the message did not decode as the type the service takes |
+| `"NoPeer"` | the address names no node to send to |
+| `"NoListener"` | `listen` could not listen where it was told |
+| `"NoKey"` | there is no cluster key to authenticate with |
 
 **On the wire.** One persistent, multiplexed connection per node *pair*, carrying
 length-prefixed frames, dialed lazily. Messages cross as JSON using the same
@@ -554,6 +589,10 @@ messages queued when a node is declared down are dropped.
 * `sleep(ms)` parks the calling virtual thread. Only that goroutine waits, so two
   calls that each sleep, waited for together in one `await`, finish in about the
   longer of the two rather than the sum. A non-positive `ms` returns immediately.
+* `sleepForever()` parks the calling virtual thread for good, for a `main` that
+  has started what the program is for and has nothing left to do itself. The
+  program still ends where it would have: at `hive.term.exit`, or when the last
+  window closes.
 
 ## 14.12 `hive.time`
 
@@ -589,8 +628,9 @@ Times are plain `Int`s — Unix seconds.
 ## 14.13 `hive.env`
 
 * `get(name)` → `Result<Str, hive.env.EnvironmentError>`. It resolves in this
-  order: the `.env` file in the program's own folder; the `.env` in the parent
-  folder; the OS environment.
+  order: the `.env` file beside the executable; the one in the working directory
+  — the entrypoint's folder, under `hive run`; the `.env` in the parent folder of
+  either; the OS environment. The first file to name a key wins.
 * The `.env` file is read **once**, on the first `get`. Blank lines and `#`
   comments are ignored, an optional `export ` prefix is allowed, and a value may
   be wrapped in quotes, which are stripped.
@@ -612,7 +652,8 @@ A `SqlConnection` is a **connection pool**, safe to hold for the life of the
 program and to share across virtual threads. Open it once in `main` and pass it
 along. Never open one per query.
 
-Runtime failures carry a `reason`: `"Connection"`, `"Query"`, `"Shape"` (a
+Runtime failures carry a `reason`: `"Connection"` (the database could not be
+opened or reached, or the connection is closed), `"Query"`, `"Shape"` (a
 different number of columns came back) or `"Convert"` (a cell did not fit its
 field's type).
 
@@ -626,18 +667,26 @@ one connection.
 A **view is a value** — a tree of widgets — and what paints it is decided
 somewhere else:
 
-* `window(title, view, update, state)` opens a window and does not return.
-  `windowAddressed` is the same, with an `update` that is also handed the
-  window's own address.
+* `window(title, view, update)` is a window, as a handler for
+  [`spawn`](13-builtins.md#services-spawn-at-kill) — which is what opens it,
+  with the state it starts from:
+  `spawn(ui.window("Notes", view, update), fresh())`.
 * `html(view)` renders the same tree as an HTML fragment, and `page(title, view)`
   as a whole document — which is what an `httpServe` handler answers with.
 
 **What a window is.** An application-mode browser window — no address bar and no
 tabs — running against a **profile of its own**, so it is its own process rather
 than a window inside somebody's browser: none of your own session, extensions or
-history is in it, and quitting a browser does not close it. Closing the window
-ends the program. A machine with no Chromium-family browser falls back to an
-ordinary tab, which is the one case where the window belongs to a browser.
+history is in it, and quitting a browser does not close it. A machine with no
+Chromium-family browser falls back to an ordinary tab, which is the one case
+where the window belongs to a browser.
+
+**Opening a window does not wait for it.** `spawn` answers as soon as the window
+is up, so a program may open as many as it likes. Closing a window kills its
+service, and closing the **last** one ends the program. A `main` that returns
+while a window is open waits for them all to close — the program lasts as long as
+there is something on screen — and one that has nothing left to do itself can
+say so with [`hive.task.sleepForever`](#1411-hivetask).
 
 **Its typeface is `assets/font.woff2`**, where the program ships one, by the same
 convention: every widget is set in it, and a program with none is set in the
@@ -662,11 +711,15 @@ Two environment variables are read by a window, and by nothing else:
 | `HIVE_WINDOW=print` | prints `hive-window <url>` instead of opening a browser, for whatever is going to show the page |
 | `HIVE_FOLDS=1` | prints, once a second, how many turns the window took and drew, the median, 90th-percentile and worst time each spent in `update`, `view` and sending the page, and the collections since the last line |
 
-**The window is a service.** `update` is a `hive.syslink.spawn` handler —
-`proc (mut State, Msg): Msg` — and is checked as one, so a window has an address
-and can be posted to by a background task or by another machine. That is why the
-module needs no notion of a *command*. What `update` returns answers a request
-from another node, and is discarded for an event of the window's own.
+**The window is a service.** `update` is a service's handler —
+`proc (mut State, Msg): Msg`, or `proc (mut State, Msg, Address): Msg` to be
+handed the window's own address — and is checked as one, and `window` answers
+with a handler of the same shape. So a window has an address, may be spawned
+under a name, and can be posted to by a background task or by another machine.
+That is why the module needs no notion of a *command*. What `update` returns
+answers a request from another node, and is discarded for an event of the
+window's own. Called directly, the handler `window` answers with is `update` and
+nothing more, which is what a test calls.
 
 **The view is a `func`, and that is not a formality.** A func cannot hold a
 mutex, so drawing cannot write the model or anything else the caller can see —
@@ -1022,8 +1075,8 @@ ui.sound([ui.voice(ui.Voice.Music()), ui.volume(0.2),
           ui.track("audio/theme.ogg")], "music")
 ```
 
-**The program's `assets/` directory is embedded into the executable**, and a
-`track` names a path within it. There is no such directory beside the entrypoint,
+**The program's `assets/` directory is embedded into the executable** whenever
+the program opens a window, and a `track` names a path within it. There is no such directory beside the entrypoint,
 nothing is embedded and the program is exactly the size it was; where there is
 one, the whole tree goes in and the window serves it to its own page over its own
 socket. Nothing crosses a network at run time and a built program is still one

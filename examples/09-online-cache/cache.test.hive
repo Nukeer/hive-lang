@@ -18,9 +18,9 @@
 //      whoever names it, so `file:<name>?mode=memory&cache=shared` gives each
 //      test a private one and no test can be made to pass, or fail, by the test
 //      before it.
-//   2. Every test that registers #Cache stops the service before it ends. A name
-//      is registered once per node, and a test process is one node — a service
-//      left running would take the name with it into the next test.
+//   2. Every test that spawns #Cache kills the service before it ends. A name is
+//      registered once per node, and a test process is one node — a service left
+//      running would take the name with it into the next test.
 
 import ./cache
 
@@ -44,6 +44,16 @@ proc freshDb(name: Str): hive.sql.SqlConnection {
 	}
 }
 
+// With no name to be refused, this spawn always succeeds.
+proc started(db: hive.sql.SqlConnection, peers: Str[dyn]): Address {
+	spawned := spawn(cache.cache, cache.Node(db, peers))
+	if spawned is Result.Ok(node) {
+		return node
+	} else if spawned is Result.Error(err) {
+		panic err
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The service
 // ---------------------------------------------------------------------------
@@ -59,7 +69,7 @@ proc freshDb(name: Str): hive.sql.SqlConnection {
 test "a name stored on this node comes back from it" {
 	db := freshDb("stored-comes-back")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
+	node := started(db, alone)
 
 	mut Str acked = ""
 	stored := node(cache.Cache.Store("greeting", "from A")) with timeout 2000
@@ -75,13 +85,13 @@ test "a name stored on this node comes back from it" {
 	}
 	assert got == "from A"
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 test "a name this node never stored is missing" {
 	db := freshDb("never-stored")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
+	node := started(db, alone)
 
 	mut missing := false
 	answer := node(cache.Cache.Lookup("nobody")) with timeout 2000
@@ -90,7 +100,7 @@ test "a name this node never stored is missing" {
 	}
 	assert missing
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // The query is an INSERT OR REPLACE, and this is the test that says so: a second
@@ -99,7 +109,7 @@ test "a name this node never stored is missing" {
 test "storing a name again replaces its value" {
 	db := freshDb("stored-twice")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
+	node := started(db, alone)
 
 	first := node(cache.Cache.Store("greeting", "from A")) with timeout 2000
 	second := node(cache.Cache.Store("greeting", "from A again")) with timeout 2000
@@ -118,7 +128,7 @@ test "storing a name again replaces its value" {
 	}
 	assert got == "from A again"
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // The receiving half of the gossip. `Invalidate` is a cast — nothing waits for its
@@ -128,7 +138,7 @@ test "storing a name again replaces its value" {
 test "an invalidated name is dropped from this node" {
 	db := freshDb("invalidated")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
+	node := started(db, alone)
 
 	stored := node(cache.Cache.Store("greeting", "from A")) with timeout 2000
 	mut ok := false
@@ -146,7 +156,7 @@ test "an invalidated name is dropped from this node" {
 	}
 	assert gone
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // A node is told to drop names it never had — that is what a broadcast means.
@@ -154,7 +164,7 @@ test "an invalidated name is dropped from this node" {
 test "invalidating a name this node never had changes nothing" {
 	db := freshDb("invalidate-unknown")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
+	node := started(db, alone)
 
 	stored := node(cache.Cache.Store("kept", "still here")) with timeout 2000
 	mut ok := false
@@ -172,7 +182,7 @@ test "invalidating a name this node never had changes nothing" {
 	}
 	assert got == "still here"
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // The sending half of the gossip cannot be *observed* in one process — there is
@@ -183,7 +193,7 @@ test "invalidating a name this node never had changes nothing" {
 test "a store is not held up by a peer that is not there" {
 	db := freshDb("dead-peer-broadcast")
 	Str[dyn] peers = ["127.0.0.1:59999"]
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, peers))
+	node := started(db, peers)
 
 	mut Str acked = ""
 	stored := node(cache.Cache.Store("greeting", "from A")) with timeout 2000
@@ -200,14 +210,14 @@ test "a store is not held up by a peer that is not there" {
 	}
 	assert got == "from A"
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // Every turn answers, so an answer sent as a request is answered too: with itself.
 test "an answer sent as a request comes straight back" {
 	db := freshDb("no-reply")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
+	node := started(db, alone)
 
 	mut Str echoed = ""
 	answer := node(cache.Cache.Stored("greeting")) with timeout 2000
@@ -216,14 +226,14 @@ test "an answer sent as a request comes straight back" {
 	}
 	assert echoed == "greeting"
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // The caller must not be told a name was stored when it was not.
 test "a store the database refuses is not reported as stored" {
 	db := freshDb("refused")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
+	node := started(db, alone)
 	hive.sql.close(db)
 
 	mut Str refused = ""
@@ -233,22 +243,23 @@ test "a store the database refuses is not reported as stored" {
 	}
 	assert refused == "greeting"
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // ---------------------------------------------------------------------------
 // The front door
 // ---------------------------------------------------------------------------
 // `handler` is an ordinary proc: `httpServe` calls it once per request, and so
-// can a test. It finds the service through `at(#Cache)`, so these tests register
-// one — and stop it again, since the name outlives the test otherwise.
+// can a test. It finds the service through `at(#Cache)`, so these tests spawn
+// one under that name — and kill it again, since the name outlives the test
+// otherwise.
 
 test "the front door stores and reads back through the service" {
 	db := freshDb("front-door")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
-	registered := hive.syslink.register(#Cache, node)
+	registered := spawn(cache.cache, cache.Node(db, alone), #Cache)
 	assert registered is Result.Ok(_)
+	node := at(#Cache)
 
 	set := cache.handler(hive.net.HttpRequest("POST", "/set/greeting", [], "from A"), alone)
 	assert set.status == 200
@@ -258,21 +269,21 @@ test "the front door stores and reads back through the service" {
 	assert got.status == 200
 	assert got.body == "from A"
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 test "a name no node has is a 404" {
 	db := freshDb("front-door-missing")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
-	registered := hive.syslink.register(#Cache, node)
+	registered := spawn(cache.cache, cache.Node(db, alone), #Cache)
 	assert registered is Result.Ok(_)
+	node := at(#Cache)
 
 	got := cache.handler(hive.net.HttpRequest("GET", "/get/nobody", [], ""), alone)
 	assert got.status == 404
 	assert got.body == "no node has nobody\n"
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // A peer that is not there comes back as a Result.Error rather than an answer,
@@ -284,14 +295,14 @@ test "a peer that cannot be reached ends the search instead of hanging" {
 	db := freshDb("front-door-dead-peer")
 	Str[dyn] alone = []
 	Str[dyn] peers = ["127.0.0.1:59999"]
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
-	registered := hive.syslink.register(#Cache, node)
+	registered := spawn(cache.cache, cache.Node(db, alone), #Cache)
 	assert registered is Result.Ok(_)
+	node := at(#Cache)
 
 	got := cache.handler(hive.net.HttpRequest("GET", "/get/nobody", [], ""), peers)
 	assert got.status == 404
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // A client is never told "stored" for something that was not — here because the
@@ -299,16 +310,16 @@ test "a peer that cannot be reached ends the search instead of hanging" {
 test "a store the cache refused is a 500, not a 200" {
 	db := freshDb("front-door-broken")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
-	registered := hive.syslink.register(#Cache, node)
+	registered := spawn(cache.cache, cache.Node(db, alone), #Cache)
 	assert registered is Result.Ok(_)
+	node := at(#Cache)
 	hive.sql.close(db)
 
 	set := cache.handler(hive.net.HttpRequest("POST", "/set/greeting", [], "from A"), alone)
 	assert set.status == 500
 	assert set.body == "the cache refused to store that\n"
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // Only two routes exist, and anything else says so rather than falling through
@@ -316,9 +327,9 @@ test "a store the cache refused is a 500, not a 200" {
 test "an unrecognised route is turned away" {
 	db := freshDb("front-door-routes")
 	Str[dyn] alone = []
-	node := hive.syslink.spawn(cache.cache, cache.Node(db, alone))
-	registered := hive.syslink.register(#Cache, node)
+	registered := spawn(cache.cache, cache.Node(db, alone), #Cache)
 	assert registered is Result.Ok(_)
+	node := at(#Cache)
 
 	got := cache.handler(hive.net.HttpRequest("GET", "/", [], ""), alone)
 	assert got.status == 404
@@ -329,7 +340,7 @@ test "an unrecognised route is turned away" {
 	wrong := cache.handler(hive.net.HttpRequest("GET", "/set/greeting", [], "from A"), alone)
 	assert wrong.status == 404
 
-	hive.syslink.stop(node)
+	kill(node)
 }
 
 // The one pure function in the app, tested the way `15 - Testing` tests a cart:

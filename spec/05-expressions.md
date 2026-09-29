@@ -31,8 +31,8 @@ A call is `callee(args)`. Every call **blocks its caller**
 
 ### Named arguments
 
-Funcs, procs, queries and type constructors — builtin ones included — accept
-arguments by name:
+Funcs, procs, queries and type constructors — the library's own record types
+included, like `hive.net.HttpResponse` — accept arguments by name:
 
 ```hive
 f(b: 1, "s")
@@ -41,7 +41,12 @@ f(b: 1, "s")
 Named arguments may appear anywhere; only the unnamed ones need to be in order,
 filling whichever parameters the named ones did not claim. Names must exist,
 must not repeat, and **once named arguments are used the call must cover the
-full parameter list**.
+full parameter list**. They are evaluated in the order they are written, whatever
+order the parameters come in.
+
+A builtin (`len`, `join`, …) and a library call (`hive.math.clamp`) take their
+arguments **by position only**: they have no parameter names to match, so naming
+one is a compile error.
 
 ### Piping a value in
 
@@ -108,11 +113,15 @@ function value's parameters have no names, so its arguments go by position.
 
 Two things cannot become values:
 
+* a **builtin** or a **library call** — neither a bare reference nor a `_` hole
+  makes one a value. Several builtins are overloaded, and a library call has no
+  signature a value could carry. Wrap it in a `func` of your own, and use that;
 * a **generic** callable — which copy a call reaches is decided by the argument
-  types, and a value carries none;
-* a callable with a **statically-sized parameter**, beyond one immutable local
-  binding it is called through. See
-  [10](10-bounds.md#a-promise-restricts-a-callable-as-a-value).
+  types, and a value carries none.
+
+A callable with a statically-sized parameter is a value like any other, and its
+type carries the promise — see
+[10](10-bounds.md#a-promise-travels-with-a-callable-as-a-value).
 
 ## 5.5 Member access, indexing, slicing
 
@@ -214,16 +223,25 @@ Most of arithmetic is unsurprising. These are the cases worth stating exactly:
 | expression | result |
 | --- | --- |
 | `a / 0`, `a % 0` (`Int` or `Float`) | `0` — division and remainder by zero are values, not crashes |
-| `Int` overflow (`+ - * **`) | wraps, two's-complement, silently |
-| `2 ** 100` | `0` — the wrap above, reached by repeated multiplication |
+| `Int` overflow (`+ - * **`, unary `-`, `/`) | stays at the edge it would have passed: `MAX + 1` is `MAX`, `MIN - 1` is `MIN` |
+| `2 ** 100` | `9223372036854775807` — the edge above, reached by repeated multiplication |
+| `-MIN`, `MIN * -1`, `MIN / -1` | `MAX` — the one answer `MIN` has no opposite for |
 | `n ** k` with `k < 0` (`Int`) | `0`, including `1 ** -1` |
 | `n ** 0` | `1` |
 | `-7 % 3` | `-1` — the remainder takes the sign of the dividend |
 | `10.0 ** 400.0` | `+Inf` — `Float` arithmetic does produce non-finite values |
 
-`**` on `Int`s is repeated multiplication and wraps the same way. A negative
-`Int` exponent has no integral answer, so it yields `0` rather than a fraction.
-For the mathematical answer, work in `Float`, where `**` is real exponentiation.
+`MAX` and `MIN` are the largest and smallest `Int`, `9223372036854775807` and
+`-9223372036854775808`. An `Int` never wraps around from one to the other: a sum,
+difference, product or power that would pass one **is** that one, and it stays
+there — so a counter that reaches `MAX` sits at `MAX` however much more is added,
+rather than turning negative. Compound assignments and `++`/`--` are arithmetic
+like any other and stop at the same edges.
+
+`**` on `Int`s is repeated multiplication and stops at an edge the same way. A
+negative `Int` exponent has no integral answer, so it yields `0` rather than a
+fraction. For the mathematical answer, work in `Float`, where `**` is real
+exponentiation.
 
 ### Unspecified behaviour
 
@@ -253,7 +271,7 @@ A decode target is not written here. Reading a document into a declared type is
 
 ## 5.9 Evaluation order
 
-Operands are evaluated left to right. `&&` and `||` short-circuit: the right
+Operands, and a call's arguments, are evaluated left to right as written. `&&` and `||` short-circuit: the right
 operand is evaluated only if the left did not decide the answer. This is what
 makes `if x is T.A(v) && v == "ok"` legal — `v` exists only because the left
 side matched.

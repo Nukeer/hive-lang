@@ -19,7 +19,9 @@ A test is named **in prose** because a test name is documentation, not something
 anything calls — and for the same reason it takes no parameters and returns
 nothing. Tests may live beside the code they are about or in a file of their own;
 a file holding only tests needs no `main`, and a test run on a program runs
-**every test in every file the entrypoint reaches**.
+**every test in every file the entrypoint reaches**. The title is how the report
+names a test, so two tests may not share one — nor two titles that differ only in
+a space against an `_`, which the report writes alike.
 
 ## `assert` means the same thing, and does something different
 

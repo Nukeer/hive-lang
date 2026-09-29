@@ -15,6 +15,7 @@ import ./ast
 import ./diag
 import ./fetch
 import ./goffi
+import ./infer
 import ./lexer
 import ./parser
 import ./paths
@@ -67,7 +68,7 @@ type Load {
 proc load(entry: Str): Program {
 	mut Load l = Load([], [], [], fetch.readLock(entry), [])
 	key := paths.normalise(entry)
-	loadFile(l, key, entry, 0)
+	loadFile(l, key, entry, entry, 0)
 	fetch.writeLock(l.lock)
 	if len(l.errors) > 0 {
 		return Program(ast.Module([], [], []), l.sources, l.errors)
@@ -90,9 +91,10 @@ proc loadText(name: Str, source: Str): Program {
 
 // --- The walk ----------------------------------------------------------------
 
-proc loadFile(l: mut Load, key: Str, display: Str, line: Int): void {
+// `importer` is the file whose import `line` asked for this one.
+proc loadFile(l: mut Load, key: Str, display: Str, importer: Str, line: Int): void {
 	if onStack(l, key) {
-		append(l.errors, diag.Diagnostic(display, line, cycleMessage(l, key)))
+		append(l.errors, diag.Diagnostic(importer, diag.onSomeLine(line), cycleMessage(l, key)))
 		return
 	}
 	// A file is loaded once however many modules reach for it.
@@ -107,7 +109,7 @@ proc loadFile(l: mut Load, key: Str, display: Str, line: Int): void {
 	}
 	read := hive.file.read(display)
 	if read is Result.Error(why) {
-		append(l.errors, diag.Diagnostic(display, line, "cannot read `{display}`: {why.message}"))
+		append(l.errors, diag.Diagnostic(importer, diag.onSomeLine(line), "cannot read `{display}`: {why.message}"))
 		return
 	}
 	if read is Result.Ok(source) {
@@ -157,7 +159,7 @@ proc appendSource(l: mut Load, key: Str, display: Str, source: Str): void {
 		found := resolveImport(l, dir, line, display)
 		if found != "" {
 			hive.map.set(resolved, line.path, paths.normalise(found))
-			loadFile(l, paths.normalise(found), found, line.line)
+			loadFile(l, paths.normalise(found), found, display, line.line)
 		}
 	}
 	append(l.keys, key)
@@ -279,13 +281,53 @@ func arrow(entry: Str, indented: Bool): Str {
 
 // --- Flattening --------------------------------------------------------------
 
+// The passes after this one report against a declaration's flattened name, and
+// its prefix is what says which file it came from: the message moves there, and
+// every flattened name in it reads the way the source spells it.
+func placed(program: Program, entry: Str, ds: diag.Diagnostic[]): diag.Diagnostic[dyn] {
+	mut diag.Diagnostic[dyn] out = []
+	for each d in ds {
+		if d.file != "" {
+			append(out, d)
+			continue
+		}
+		mut file := entry
+		mut message := d.message
+		for each src in program.sources {
+			if src.prefix != "" && text.startsWith(message, "in `" + src.prefix) {
+				file = paths.joinPath(src.dir, paths.baseOf(src.key))
+				message = "in `" + text.span(text.chars(message), len("in `" + src.prefix), len(message) - len("in `" + src.prefix))
+			}
+		}
+		for each src in program.sources {
+			if src.prefix != "" {
+				message = text.replace(message, src.prefix, paths.stem(src.key) + ".")
+			}
+		}
+		append(out, diag.Diagnostic(file, d.line, message))
+	}
+	return out
+}
+
 // What a module's declarations are renamed with. The entrypoint keeps its own
 // names, so `hive emit` shows an untouched `main` beside a `text_1_repeat`.
 func prefixFor(key: Str, index: Int, isEntry: Bool): Str {
 	if isEntry {
 		return ""
 	}
-	return paths.stem(key) + "_{index}_"
+	// Only letters and digits of the file's name: `text-utils.hive` still has to
+	// name Go identifiers. The index keeps two that tidy alike apart.
+	mut Str[dyn] kept = []
+	for each c in text.chars(paths.stem(key)) {
+		if text.isAlnum(c) && bytes(c) == 1 {
+			append(kept, c)
+		}
+	}
+	mut stem := join(kept, "")
+	if stem == "" || text.isDigit(text.charAt(kept, 0)) {
+		stem = "m" + stem
+	}
+	return stem + "_{index}_"
 }
 
 // Every Go file the program imported, in load order. The build compiles each as
@@ -336,7 +378,7 @@ proc flatten(sources: Source[], entryKey: Str, found: diag.Diagnostic[]): Progra
 	mut Str[dyn] used = []
 	mut ast.Decl[dyn] decls = []
 	for each src in prefixed {
-		mut Rw rw = Rw(src.key, hive.map.new(), hive.map.new(), flatNames, [], [], [])
+		mut Rw rw = Rw(src.key, entryKey, hive.map.new(), hive.map.new(), flatNames, [], [], [])
 		bindImports(rw, src, known)
 		for each d in src.module.decls {
 			append(decls, rewriteDecl(rw, d))
@@ -353,7 +395,7 @@ proc flatten(sources: Source[], entryKey: Str, found: diag.Diagnostic[]): Progra
 	// Only what the program named, so a program that never names one builds as before.
 	for each src in library {
 		if indexOf(used, src.key) is Result.Ok(_) {
-			mut Rw rw = Rw(src.key, hive.map.new(), hive.map.new(), flatNames, [], [], [])
+			mut Rw rw = Rw(src.key, entryKey, hive.map.new(), hive.map.new(), flatNames, [], [], [])
 			for each d in src.module.decls {
 				append(decls, rewriteDecl(rw, d))
 			}
@@ -382,6 +424,8 @@ proc libraryModules(flatNames: mut hive.map.Map<Str, Str>): Source[dyn] {
 type Rw {
 	// The module being rewritten, which is what turns a bare name into a key.
 	moduleKey: Str
+	// The entrypoint's, whose declarations keep their bare names.
+	entryKey: Str
 	// Import alias -> the key of the module it names.
 	aliasKeys: hive.map.Map<Str, Str>
 	// Import alias -> the standard library module it stands for. Rewritten back
@@ -457,6 +501,12 @@ proc libraryFlat(rw: mut Rw, module: Str, name: Str): Str {
 		return flat
 	}
 	return ""
+}
+
+// The entrypoint's names are unprefixed, so they would capture another module's bare builtin.
+func capturedByEntry(rw: Rw, name: Str): Bool {
+	return rw.moduleKey != rw.entryKey && isLocal(rw, name) == false && ownFlat(rw, name) == ""
+		&& hive.map.has(rw.flatNames, rw.entryKey + "#" + name)
 }
 
 func isLocal(rw: Rw, name: Str): Bool {
@@ -596,6 +646,9 @@ proc rewriteType(rw: mut Rw, t: ast.TypeExpr): ast.TypeExpr {
 proc namedType(rw: mut Rw, pkg: Str, name: Str, args: ast.TypeExpr[dyn], dims: ast.Dim[dyn]): ast.TypeExpr {
 	if pkg == "" {
 		flat := ownFlat(rw, name)
+		if name == "Address" && capturedByEntry(rw, name) {
+			return ast.TypeExpr.Named("hive", name, args, dims)
+		}
 		if flat == "" {
 			return ast.TypeExpr.Named("", name, args, dims)
 		}
@@ -732,6 +785,11 @@ proc rewriteExpr(rw: mut Rw, e: ast.Expr): ast.Expr {
 		mut ast.Arg[dyn] out = []
 		for each a in args {
 			append(out, ast.Arg(a.name, rewriteExpr(rw, a.value)))
+		}
+		if callee is ast.Expr.Ident(name) {
+			if infer.isBuiltin(name) && capturedByEntry(rw, name) {
+				return ast.Expr.Call(ast.Expr.Member(ast.Expr.Ident("hive"), name), out)
+			}
 		}
 		return ast.Expr.Call(rewriteExpr(rw, callee), out)
 	} else if e is ast.Expr.VectorLit(items) {

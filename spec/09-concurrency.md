@@ -104,10 +104,10 @@ if slowShout("worth waiting for") with timeout 100 is Result.Error(err) {
   vector fails together.
 * A timeout abandons the **waiting, not the work**: a virtual thread cannot be
   stopped from the outside, so the call runs on and only its result is dropped.
-* A `void` call has no value for the `Result` to carry, so bounding one is
-  refused rather than lowered to a type with no spelling.
-* On a [`hive.syslink`](14-stdlib.md#1410-hivesyslink) request the clause folds
-  into that module's own error rather than wrapping a second `Result` around the
+* A `void` call has no value for the `Result` to carry, so bounding one — or an
+  await-all of them — is refused rather than lowered to a type with no spelling.
+* On a request to a [service](14-stdlib.md#1410-hivesyslink) the clause folds
+  into the request's own error rather than wrapping a second `Result` around the
   first, so the result is still
   `Result<Message, hive.syslink.SyslinkError>` with reason `"Timeout"`.
 * An `async` binding cannot take one ([9.1](#x--async-fa--keep-the-result)).

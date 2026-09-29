@@ -1,7 +1,9 @@
 # 13 — Builtins
 
 These are always in scope — no import needed. Several are overloaded by argument
-type.
+type, which is why a builtin is only ever **called**: it takes its arguments by
+position, and neither a bare reference nor a `_` hole makes one a value. Wrap it
+in a `func` of your own to pass it around.
 
 | function | signature | what it does |
 | --- | --- | --- |
@@ -10,7 +12,7 @@ type.
 | `len(map)` | `len(hive.map.Map<K, T>): Int` | number of pairs |
 | `bytes(vector)` | `bytes(T[]): Int` | byte footprint of the contiguous storage |
 | `bytes(str)` | `bytes(Str): Int` | number of **bytes** in the UTF-8 encoding |
-| `append(vector, value)` | `append(T[dyn], T): void` | grows a **mutable dynamic** vector in place |
+| `append(vector, value)` | `append(T[dyn], T): void` | grows a **mutable** vector in place |
 | `prepend(vector, value)` | `prepend(T[dyn], T): void` | the same, at the **front** |
 | `drop(vector, low, high)` | `drop(T[dyn], Int, Int): T[dyn]` | removes `low`–`high` **inclusive** and hands them back |
 | `join(vector, sep)` | `join(Str[], Str): Str` | concatenates, `sep` between elements |
@@ -28,6 +30,11 @@ type.
 | `sort(values)` | `sort(T[]): T[dyn]` | in the element type's own order |
 | `sort(values, first)` | `sort(T[], func(T, T): Bool): T[dyn]` | in the order `first` gives |
 | `encode(value, codec)` | `encode(T, hive.codec.Codec<E>): Str` | `value` written in the format `codec` names |
+| `spawn(handler, state)` | `spawn(proc(mut S, M): M, S): Result<Address, hive.syslink.SyslinkError>` | starts a service |
+| `spawn(handler, state, name)` | `spawn(proc(mut S, M): M, S, Atom): Result<Address, hive.syslink.SyslinkError>` | starts one registered under `name` |
+| `at(name)` | `at(Atom): Address` | the service registered under `name` on this node |
+| `at(endpoint, name)` | `at(Str, Atom): Address` | the same service on the node at `endpoint` |
+| `kill(address)` | `kill(Address): void` | stops a service |
 
 `len` and `bytes` differ only for strings: for `"café"`, `len` is `4` (runes)
 while `bytes` is `5`.
@@ -71,6 +78,28 @@ arriving from outside cannot say what it should become
 ([14.7](14-stdlib.md#147-hivejson)). What a format cannot carry — a
 `hive.map.Map`, whose keys are whatever was put in it, or a `Table`, which has
 no names for its cells — is refused where the encoder is derived.
+
+## Services: `spawn`, `at`, `kill`
+
+A [service](14-stdlib.md#1410-hivesyslink) is started, named and stopped by
+these three, and reached by calling its `Address`.
+
+* **`spawn` takes either shape of handler**: `proc(mut S, M): M`, or
+  `proc(mut S, M, Address): M` for one handed its own address every turn. It is
+  the same call either way, and so is a window from
+  [`hive.ui.window`](14-stdlib.md#1415-hiveui).
+* **A name is optional, and registers the service as it starts.** The name is
+  an atom, and a name is one service's at a time on a node: a second `spawn`
+  under a name still held answers `Error` with reason `"Taken"`. A service with no
+  name has nothing to be refused, so its `spawn` is always `Ok`. A named service
+  answers with a **named address**, the only kind that survives the service being
+  restarted under the same name.
+* **`at` performs no I/O and cannot fail.** It is address construction rather
+  than a lookup, so a program may name a service that is not running yet — and a
+  request to one that is not there is what reports it.
+* **`kill` works on any address**, on this node or another. The service's
+  mailbox closes, its monitors are told, and its name is free again before any of
+  them hears about it. Killing one twice is harmless.
 
 ## A declaration of your own wins
 
@@ -137,9 +166,10 @@ decision like that. To run a batch of calls together, write the
 ## Growing and shrinking: `append`, `prepend`, `drop`
 
 All three write *through* a vector rather than handing back a new one, and all
-three ask for a **mutable dynamic** vector (`mut T[dyn]`). Dynamic has to be
-declared, because a `mut v := [...]` binding reads its length off the value and a
-length read off a value is a static one.
+three ask for a **mutable** vector whose length is not a promise: a `mut T[dyn]`,
+or a `mut v := [...]` binding, whose length is only inferred
+([10.4](10-bounds.md#104-an-inferred-length-is-weaker)). A length written in the
+type — `mut Str[3] v` — is kept, so growing one is a compile error.
 
 * `prepend` is `append`'s other end and costs what that implies: every element
   moves up one, where `append` costs nothing. It hands nothing back, so it may

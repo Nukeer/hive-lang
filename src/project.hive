@@ -137,27 +137,24 @@ proc checked(entry: Str, from: Int): Compiled {
 	if len(program.errors) > 0 {
 		return refused(program.errors)
 	}
-	// Every pass from here down runs on one flattened program whose nodes carry no
-	// file, so it reports against the entrypoint. Spec 17.3 records that limit.
-	//
 	// Monomorphization runs before the checks, so each copy is checked on its own
 	// terms: `Str[3]` held to that length, `Str[dyn]` guarding its indexes.
 	progress.step(from, "expanding generics in " + progress.counted(len(program.sources), "file"))
 	expanded := mono.expand(program.module, from)
 	if len(expanded.errors) > 0 {
-		return refused(diag.allInFile(entry, expanded.errors))
+		return refused(loader.placed(program, entry, expanded.errors))
 	}
 	progress.step(from, "checking " + progress.counted(len(expanded.module.decls), "declaration"))
 	found := checks.checkModule(expanded.module)
 	if len(found) > 0 {
-		return refused(diag.allInFile(entry, found))
+		return refused(loader.placed(program, entry, found))
 	}
 	// Every index and slice is proved in range before anything is written, so
 	// the Go that comes out can never fail out of one.
 	progress.step(from, "proving every index in range")
 	inRange := ranges.checkModule(expanded.module)
 	if len(inRange) > 0 {
-		return refused(diag.allInFile(entry, inRange))
+		return refused(loader.placed(program, entry, inRange))
 	}
 	return Compiled(expanded.module, emit.Emitted("", [], [], [], [], false, []), [])
 }
@@ -220,9 +217,11 @@ proc build(entry: Str, withTests: Bool, from: Int): Written {
 		if vendor.placeThree(directory + "/hive") is Result.Error(why) {
 			append(errors, diag.about(entry, why))
 		}
-		placeAssets(entry, directory + "/hive", from, written, errors)
 	} else {
 		vendor.clearThree(directory + "/hive")
+	}
+	if drawsAScene || emitted.window {
+		placeAssets(entry, directory + "/hive", from, written, errors)
 	}
 	// Each imported Go file, copied into the generated project as a package of its
 	// own. Copied rather than referred to, so what compiled is in the build
@@ -294,8 +293,8 @@ proc put(directory: Str, name: Str, contents: Str, written: mut Str[dyn], errors
 }
 
 // The program's own `assets/` directory, copied into the build so the Go toolchain
-// can take it into the executable. It goes in beside three.js and for the same
-// reason: a scene that names a recording has to have it.
+// can take it into the executable: a window's typeface, and a scene's recordings
+// and pictures.
 //
 // A program with no such directory writes no `hive/assets.go` and embeds nothing.
 // That is why the file is generated rather than carried: `//go:embed` cannot be

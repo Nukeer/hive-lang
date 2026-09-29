@@ -1,7 +1,7 @@
-// Distributed Actors (hive.syslink)
-// =================================
-// A `hive.syslink` *service* is a long-lived, addressable thing with a mailbox
-// and private state. The point of the module is that one statement reaches it
+// Distributed Actors
+// ==================
+// A *service* is a long-lived, addressable thing with a mailbox and private
+// state, started by `spawn`. The point is that one statement reaches it
 // whether it is a mailbox in this process or a service on another machine — and
 // there is only ever the one statement: you *call the address*. What the *call
 // site* does with it decides what it means, exactly as it does for a func:
@@ -52,7 +52,7 @@ type Note {
 	Counted { seen: Int }
 	// Asking the inbox to watch another service. Addresses are ordinary values,
 	// so one travels inside a message like anything else.
-	Watch { peer: hive.syslink.Address }
+	Watch { peer: Address }
 	// A death notice, which the watcher picks itself.
 	PeerLost
 	// Asking the inbox to fall over, to show a crash stays local to it.
@@ -73,7 +73,7 @@ proc inbox(seen: mut Int, note: Note): Note {
 		echo "  [inbox] someone told us they have seen {count} notes"
 		return note
 	} else if note is Note.Watch(peer) {
-		hive.syslink.monitor(hive.syslink.at(#Inbox), peer, Note.PeerLost())
+		hive.syslink.monitor(at(#Inbox), peer, Note.PeerLost())
 		echo "  [inbox] watching the peer's inbox"
 		return note
 	} else if note is Note.PeerLost {
@@ -103,20 +103,18 @@ proc main(): void {
 	}
 	echo "listening on {me}, peer at {peer}"
 
-	// `at` is a service on this node; `on` is the same service somewhere else.
-	// Only the *service* name is an atom, which is what lets the compiler know
-	// every mailbox this program publishes.
-	chat(hive.syslink.at(#Inbox), hive.syslink.on(peer, #Inbox))
+	// `at(name)` is a service on this node; `at(endpoint, name)` is the same
+	// service somewhere else. Neither looks anything up: each is an address, built
+	// from what it was told.
+	chat(at(#Inbox), at(peer, #Inbox))
 }
 
 // One address is a mailbox in this process, the other a service on the far node.
 // Nothing below tells them apart.
-proc chat(mine: hive.syslink.Address, theirs: hive.syslink.Address): void {
-	// Spawn the service and publish it under a name. A service name is an atom
-	// from a closed set, which is exactly why neither `at` nor `on` above needs a
-	// type annotation: the compiler can see what every registered mailbox takes.
-	box := hive.syslink.spawn(inbox, 0)
-	if hive.syslink.register(#Inbox, box) is Result.Error(err) {
+proc chat(mine: Address, theirs: Address): void {
+	// Start the service under the name both addresses above were built from.
+	// Starting one is a call that can fail: somebody else may hold the name.
+	if spawn(inbox, 0, #Inbox) is Result.Error(err) {
 		panic err
 	}
 
@@ -140,17 +138,17 @@ proc chat(mine: hive.syslink.Address, theirs: hive.syslink.Address): void {
 	// opened it. So sending to a node adds it, a node dialing in adds itself, and
 	// losing the connection — a peer that quits, or one that stops answering its
 	// health checks — takes it back out with nothing to clean up. Each entry is
-	// the endpoint to hand to `on`, which is what makes this the answer to "who
+	// the endpoint to hand to `at`, which is what makes this the answer to "who
 	// can I call later?".
 	for each endpoint in hive.syslink.peers() {
 		echo "  connected to {endpoint}"
 	}
 
-	// The same call *without* `async` is a request: it waits for the answer. This
-	// is the one place in the module that reports failure, because it is the only
-	// one with somewhere to report to — a timeout, a service that died mid-request
-	// and an unreachable node all arrive here as a Result.Error. `with timeout`
-	// bounds the wait; leave it off and syslink waits its own default instead.
+	// The same call *without* `async` is a request: it waits for the answer, and
+	// so it is the send that reports failure, having somewhere to report to — a
+	// timeout, a service that died mid-request and an unreachable node all arrive
+	// here as a Result.Error. `with timeout` bounds the wait; leave it off and
+	// syslink waits its own default instead.
 	answer := theirs(Note.HowMany()) with timeout 4000
 	if answer is Result.Ok(reply) && reply is Note.Counted(count) {
 		echo "the peer's inbox has seen {count} notes"

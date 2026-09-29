@@ -68,12 +68,12 @@ Because the promise is kept everywhere, it is never lost: `v[2]` stays legal
 after the reassignment, and a `Str[3]` parameter can be indexed inside the callee
 without a guard, since every call site was checked.
 
-### A promise restricts a callable as a value
+### A promise travels with a callable as a value
 
-Keeping a promise means keeping it at every call site, so a callable with a
-statically-sized parameter is restricted as a value. It may be bound to an
-**immutable name** — a bare reference or a partial application — and called
-through it, and those calls are checked exactly as direct ones are:
+Keeping a promise means keeping it at every call site, and a function type spells
+the length: `f := takes` is a `proc(Str[3]): void`, and every call through it —
+or through a parameter, a field or a vector holding it — is checked exactly as a
+direct one is:
 
 ```hive
 proc takes(v: Str[3]): void { echo v[2] }
@@ -83,13 +83,11 @@ f(["a", "b", "c"])               // fine
 f(["a"])                         // compile error: `f` holds a `Str[3]` taker
 ```
 
-It may **not** be handed on any further — passed as an argument, returned, stored
-in a vector or a field — because the eventual call would happen somewhere with no
-idea what was promised. The same reason rules out a `mut` holder, which could be
-pointed at a different callable after the fact.
-
-Declaring the parameter `Str[dyn]` or `Str[]` lifts every one of these
-restrictions, at the cost of guarding the index inside the callee.
+So it fills only a slot that promises as much. A `proc(Str[]): void` or
+`proc(Str[dyn]): void` parameter would be called with a vector of any length,
+which `takes` cannot take, so handing it one is a compile error. The other way
+round is safe: a callable taking `Str[]` fills a `proc(Str[3]): void` slot, since
+three is a length it takes.
 
 ## 10.4 An inferred length is weaker
 

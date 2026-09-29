@@ -121,34 +121,32 @@ different route, or does not quite do it.
   handed the caller's own storage, since 4.2 already proves it cannot write
   where the caller can see. Both give up entirely on anything they cannot
   follow, so both refuse to share where a cleverer one would.
-* **Coverage names a declaration as the flattened program spells it.** With more
-  than one file in the program, `never exercised` reads `cart_0_describe` rather
-  than `describe` ([16](16-testing.md#coverage-is-not-a-separate-command)), because the report is written
-  from the flattened module and nothing maps a name back to the file it came
-  from. The per-file breakdown that chapter describes is not printed, for the
-  same reason.
+* **Coverage is one list, not one per file.** With more than one file in the
+  program, `never exercised` names an imported declaration as its module spells it
+  — `cart.describe` — but the per-file breakdown
+  [16](16-testing.md#coverage-is-not-a-separate-command) describes is not printed,
+  because the report is written from the flattened module.
 * **A test failure names the generated file.** The specification says a failure
   reports the `.hive` line, through `//line` directives
   ([15](15-lowering.md#154-source-positions)). Here it reports `main_test.go`,
   because the tree carries no positions past the parser — the same reason
-  [17](17-diagnostics.md#173-two-limits-worth-knowing) gives for the other
+  [17](17-diagnostics.md#173-a-limit-worth-knowing) gives for the other
   passes reporting against a declaration.
 * **The bounds pass proves less than it could.** Everything
   [10](10-bounds.md) describes is implemented, and it is conservative in three
   places the specification leaves open: a proof is keyed on a *path* — a name, a
   field, a row at a literal index — so a guard on anything else proves nothing;
-  two names for one vector each need their own guard; and what one conjunct of a
-  guard proves is not carried into a later conjunct of the same guard, so
-  `if v bounds i && v[i] > 0` is refused where `if v bounds i { if v[i] > 0 }`
-  is not. All three refuse a program the specification permits rather than
-  accepting one it forbids, which is the safe direction to be wrong in.
+  two names for one vector each need their own guard; and a row read at a moving
+  index, `t[r][c]`, is refused even behind two guards — binding the row first,
+  `row := t[r]`, is what proves it. All three refuse a program the specification
+  permits rather than accepting one it forbids, which is the safe direction to be
+  wrong in.
 * **A message from a pass after the parser names a declaration rather than a
   statement.** Those passes run on the flattened program, whose nodes carry a
   position on a declaration and nowhere else, so a message opens at the
   declaration's line and says which declaration it is about
-  ([17](17-diagnostics.md#173-two-limits-worth-knowing)). In a program of more
-  than one file that line is counted against the entrypoint, because flattening
-  is what discards which file a declaration came from.
+  ([17](17-diagnostics.md#173-a-limit-worth-knowing)). In a program of more
+  than one file the message is placed in the file the declaration came from.
 * **A local that is never read still compiles.** Hive allows it and Go does not,
   so every generated local is followed by `_ = name`. That is noise in the
   generated Go and nothing else.
@@ -160,7 +158,7 @@ different route, or does not quite do it.
   value, and Hive has neither, so the hash is one line of Go instead of thirty of
   Hive. What matters is that both ends of a wire compute the same number from the
   same declaration, and they do.
-* **An address does not carry its mailbox type.** `hive.syslink.Address` is one
+* **An address does not carry its mailbox type.** `Address` is one
   type rather than one per protocol, and what a send answers with is read off the
   *message* instead — which is the same type, since a service answers with one of
   its own messages. The effect is the one the specification describes; what is

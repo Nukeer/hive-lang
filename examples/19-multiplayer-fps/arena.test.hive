@@ -31,7 +31,7 @@ import ./lib/wire
 // out of one in a message. Which is the same reason the server keeps its sockets in
 // a service *per socket* rather than in the referee.
 type Player {
-	box: hive.syslink.Address
+	box: Address
 	conn: hive.net.WsConnection
 }
 
@@ -170,13 +170,14 @@ proc joining(who: Str): Player {
 		model.me = who
 		model.link = client.Link.Live(conn)
 		model.screen = client.Screen.Joining()
-		box := hive.syslink.spawn(window, model)
-		one := Player(box, conn)
-		// The real reader, on a thread of its own, and the real first thing a
-		// client says.
-		async client.listening(conn, box)
-		client.tell(model, wire.Up.Join(who))
-		return one
+		if spawn(window, model) is Result.Ok(box) {
+			one := Player(box, conn)
+			// The real reader, on a thread of its own, and the real first thing a
+			// client says.
+			async client.listening(conn, box)
+			client.tell(model, wire.Up.Join(who))
+			return one
+		}
 	}
 	panic "could not reach the arena on 9289"
 }
@@ -204,7 +205,10 @@ test "a whole game crosses a real websocket" {
 	// The server, exactly as `server.main` starts it: one service holding the world,
 	// one clock, and `wsServe` handing every connection to `seated` on a thread of
 	// its own.
-	desk := hive.syslink.spawn(server.referee, server.mustered())
+	if spawn(server.referee, server.mustered(), #Desk) is Result.Error(problem) {
+		panic problem
+	}
+	desk := at(#Desk)
 	async server.keeping(desk)
 	async hive.net.wsServe(9289, server.seated(desk, _))
 	// Give the listener a moment to bind before dialling it.

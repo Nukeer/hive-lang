@@ -165,8 +165,8 @@ test "sort needs an order, and a map, an address or a type holding one has none"
 		"in `main`: `sort` puts a vector in its elements' own order, and hive.map.Map<Str, Int> has none")
 	assert opens(problem(inMain("v := [hive.json.JsonValue.Int(1)]  echo sort(v)")),
 		"in `main`: `sort` puts a vector in its elements' own order, and hive.json.JsonValue has none")
-	boxed := "type Box \{ at: hive.syslink.Address }\n"
-	assert opens(problem(boxed + inMain("v := [Box(hive.syslink.at(#A))]  echo len(sort(v))")),
+	boxed := "type Box \{ where: Address }\n"
+	assert opens(problem(boxed + inMain("v := [Box(at(#A))]  echo len(sort(v))")),
 		"in `main`: `sort` puts a vector in its elements' own order, and Box has none")
 	assert problemCount(inMain("v := [hive.json.JsonValue.Int(1)]  echo sort(v, before)") + "\nfunc before(a: hive.json.JsonValue, b: hive.json.JsonValue): Bool \{ return false }") == 0
 	assert problemCount(inMain("echo sort([3, 1, 2])")) == 0
@@ -176,23 +176,71 @@ test "sort needs an order, and a map, an address or a type holding one has none"
 test "a service's handler writes its state and answers with one of its own messages" {
 	note := "type Note \{ Say \{ text: Str } }\n"
 	good := "proc inbox(n: mut Int, note: Note): Note \{ return note }\n"
-	assert problemCount(note + good + inMain("box := hive.syslink.spawn(inbox, 0)")) == 0
+	assert problemCount(note + good + inMain("box := spawn(inbox, 0)")) == 0
 	plain := "proc inbox(n: Int, note: Note): Note \{ return note }\n"
-	assert opens(problem(note + plain + inMain("box := hive.syslink.spawn(inbox, 0)")),
+	assert opens(problem(note + plain + inMain("box := spawn(inbox, 0)")),
 		"in `main`: a handler writes its state in place, so its first parameter takes the mutex itself")
 	answers := "proc inbox(n: mut Int, note: Note): Int \{ return n }\n"
-	assert opens(problem(note + answers + inMain("box := hive.syslink.spawn(inbox, 0)")),
+	assert opens(problem(note + answers + inMain("box := spawn(inbox, 0)")),
 		"in `main`: a handler answers with one of its own messages, so it returns Note, and this one returns Int")
-	assert opens(problem(note + good + inMain("box := hive.syslink.spawn(inbox, \"none\")")),
-		"in `main`: the state `hive.syslink.spawn` starts the service with wants Int and this is Str")
+	assert opens(problem(note + good + inMain("box := spawn(inbox, \"none\")")),
+		"in `main`: the state `spawn` starts the service with wants Int and this is Str")
+	assert opens(problem(note + good + inMain("box := spawn(inbox)")),
+		"in `main`: `spawn` takes a handler, the state it starts with and, optionally, the name")
 }
 
-test "a handler told its own address is started by the form that tells it" {
+test "spawn takes a handler with or without its own address, and a name to register it under" {
 	note := "type Note \{ Say \{ text: Str } }\n"
-	loud := "proc loud(n: mut Int, note: Note, me: hive.syslink.Address): Note \{ return note }\n"
-	assert problemCount(note + loud + inMain("box := hive.syslink.spawnAddressed(loud, 0)")) == 0
-	assert opens(problem(note + loud + inMain("box := hive.syslink.spawn(loud, 0)")),
-		"in `main`: `hive.syslink.spawn` wants a handler of the shape `proc(mut S, M): M`, and this one has 3 parameters. A handler told its own address is started with `hive.syslink.spawnAddressed`")
+	loud := "proc loud(n: mut Int, note: Note, me: Address): Note \{ return note }\n"
+	assert problemCount(note + loud + inMain("box := spawn(loud, 0)")) == 0
+	assert problemCount(note + loud + inMain("box := spawn(loud, 0, #Loud)  if box is Result.Ok(a) \{ kill(a) }")) == 0
+	assert problemCount(note + loud + inMain("box := hive.spawn(loud, 0, #Loud)")) == 0
+	assert opens(problem(note + loud + inMain("box := spawn(loud, 0, \"Loud\")")),
+		"in `main`: the name `spawn` registers the service under wants Atom and this is Str")
+	wrong := "proc loud(n: mut Int, note: Note, me: Str): Note \{ return note }\n"
+	assert opens(problem(note + wrong + inMain("box := spawn(loud, 0)")),
+		"in `main`: a handler with a third parameter is handed its own address there, an `Address`, and this one takes Str")
+	many := "proc loud(n: mut Int, note: Note, me: Address, again: Address): Note \{ return note }\n"
+	assert opens(problem(note + many + inMain("box := spawn(loud, 0)")),
+		"in `main`: `spawn` wants a handler of the shape `proc(mut S, M): M`, or `proc(mut S, M, Address): M`")
+	assert opens(problem(note + loud + inMain("box := spawn(loud, 0)  kill(box)")),
+		"in `main`: what `kill` stops wants Address and this is Result<Address, hive.syslink.SyslinkError>")
+}
+
+test "at names a service on this node or another, and does no more" {
+	assert problemCount(inMain("here := at(#Cache)  there := at(\"10.0.0.4:9000\", #Cache)  kill(here)  kill(there)")) == 0
+	assert opens(problem(inMain("here := at(\"Cache\")")), "in `main`: the name `at` reaches wants Atom and this is Str")
+	assert opens(problem(inMain("there := at(#Node, #Cache)")),
+		"in `main`: the endpoint of the node `at` reaches wants Str and this is Atom")
+	assert opens(problem(inMain("there := at()")), "in `main`: `at` takes the name a service is registered under")
+	assert opens(problem(inMain("kill(#Cache)")), "in `main`: what `kill` stops wants Address and this is Atom")
+}
+
+test "a declaration of its own called Address wins, and hive.Address is still the builtin" {
+	own := "type Address \{ street: Str }\n"
+	assert problemCount(own + inMain("home := Address(\"Main St\")  echo home.street")) == 0
+	assert problemCount(own + "proc keep(a: hive.Address): void \{ kill(a) }\n" + inMain("keep(at(#Cache))")) == 0
+	assert opens(problem("proc h(a: hive.syslink.Address): void \{ }\n" + inMain("")),
+		"in `h`: `hive.syslink` has no type `Address`")
+}
+
+test "a window is a handler for spawn, and its view reads the state its update writes" {
+	msg := "type Msg \{ Bumped }\n"
+	up := "proc up(n: mut Int, m: Msg): Msg \{ return m }\n"
+	view := "func view(n: Int): hive.ui.View \{ return hive.ui.text([], \"\{n}\") }\n"
+	assert problemCount(msg + up + view + inMain("w := spawn(hive.ui.window(\"T\", view, up), 0)")) == 0
+	loud := "proc up(n: mut Int, m: Msg, me: Address): Msg \{ return m }\n"
+	assert problemCount(msg + loud + view + inMain("w := spawn(hive.ui.window(\"T\", view, up), 0, #Main)")) == 0
+	assert opens(problem(msg + up + view + inMain("hive.ui.window(\"T\", view, up, 0)")),
+		"in `main`: `hive.ui.window` takes 3 arguments, and this call passes 4")
+	other := "func view(s: Str): hive.ui.View \{ return hive.ui.text([], s) }\n"
+	assert opens(problem(msg + up + other + inMain("w := spawn(hive.ui.window(\"T\", view, up), 0)")),
+		"in `main`: the view `hive.ui.window` draws the state with wants func(Int): hive.ui.View")
+	plain := "proc up(n: Int, m: Msg): Msg \{ return m }\n"
+	assert opens(problem(msg + plain + view + inMain("w := spawn(hive.ui.window(\"T\", view, up), 0)")),
+		"in `main`: a handler writes its state in place")
+	assert opens(problem(msg + up + view + inMain("hive.ui.windowAddressed(\"T\", view, up)")),
+		"in `main`: `hive.ui` has no `windowAddressed`")
 }
 
 test "a library type is one the library has" {
@@ -245,9 +293,10 @@ test "append needs a mut target" {
 	assert got == "in `main`: `append` grows a vector in place, so its target has to be `mut` — this one is not"
 }
 
-test "append needs a vector declared dynamic, because an inferred length is a promise" {
-	got := problem(inMain("mut v := [\"a\"]  append(v, \"b\")"))
-	assert opens(got, "in `main`: `append` needs a vector declared `[dyn]`, and `v` promises exactly 1")
+test "append grows an inferred length, and never a declared one" {
+	assert problemCount(inMain("mut v := [\"a\"]  append(v, \"b\")")) == 0
+	got := problem(inMain("mut Str[1] v = [\"a\"]  append(v, \"b\")"))
+	assert opens(got, "in `main`: `append` changes a vector's length, and `v` promises exactly 1")
 }
 
 test "prepend and drop follow append's rule exactly" {
@@ -828,8 +877,6 @@ test "a library call is held to how many arguments it takes" {
 	assert problemCount(inMain("echo hive.ui.spinner([])")) == 0
 	assert opens(problem("import hive.map\n" + inMain("mut hive.map.Map<Str, Int> m = hive.map.new()  hive.map.set(m, \"a\")")),
 		"in `main`: `hive.map.set` takes 3 arguments, and this call passes 2 arguments")
-	// A hole is an argument: a partial application still covers the whole list.
-	assert problemCount(inMain("f := hive.conv.its(_)  echo f(1)")) == 0
 	assert problemCount(inMain("echo hive.time.format(hive.time.now(), \"%Y\")")) == 0
 }
 
@@ -1038,4 +1085,174 @@ test "every mistake is reported, not just the first" {
 	// Three declarations, one mistake each.
 	source := "func a(): Int \{ return \"s\" }\nfunc b(): Int \{ }\nproc c(): void \{ echo nowhere }"
 	assert problemCount(source) == 3
+}
+
+// --- Bindings ------------------------------------------------------------------
+
+test "a call that answers with nothing cannot be bound" {
+	nothing := "proc nothing(): void \{ }\n"
+	assert opens(problem(nothing + inMain("v := nothing()")),
+		"in `main`: this call answers with nothing, so there is nothing for `v` to hold")
+	assert opens(problem(nothing + inMain("v := async nothing()")),
+		"in `main`: an `async` binding keeps what a call answers with, and this call answers with nothing")
+}
+
+test "a name is declared once per block" {
+	assert opens(problem(inMain("x := 1  x := 2")),
+		"in `main`: `x` is already declared in this block")
+	assert opens(problem("func f(n: Int): Int \{ n := 2  return n }"),
+		"in `f`: `n` is already declared in this block")
+	assert problemCount(inMain("x := 1  if x > 0 \{ x := 2  echo x }")) == 0
+	// A loop's counter is the loop's own, so the next loop may name its counter alike.
+	assert problemCount(inMain("for i := 0; i < 2; i++ \{ }  for i := 0; i < 2; i++ \{ }")) == 0
+	assert problemCount(inMain("for i := 0; i < 2; i++ \{ }  i := 5  echo i")) == 0
+}
+
+test "`_` throws a value away, as often as it likes" {
+	one := "func one(): Int \{ return 1 }\n"
+	assert problemCount(one + inMain("_ := one()  _ := one()  _ := async one()")) == 0
+}
+
+test "a mut vector bound from a literal can be rebound to another length" {
+	assert problemCount(inMain("mut v := [1, 2, 3]  v = [1]  append(v, 2)  echo v")) == 0
+	assert opens(problem(inMain("mut Int[3] v = [1, 2, 3]  v = [1]")),
+		"in `main`: the assignment to `v` wants Int[3] and this is Int[1]")
+}
+
+test "the type written for a for each binding has to be the element's" {
+	assert opens(problem(inMain("for each s: Str in [1, 2] \{ echo s }")),
+		"in `main`: the type written for `s` wants Str and this is Int")
+	assert problemCount(inMain("for each n: Int in [1, 2] \{ echo n }")) == 0
+}
+
+// --- Statements ----------------------------------------------------------------
+
+test "a value on its own is not a statement" {
+	assert opens(problem(inMain("x := 1  x + 1")),
+		"in `main`: this computes a value and does nothing with it")
+	assert problemCount(inMain("x := 1  _ := x + 1")) == 0
+}
+
+test "a loop's clauses cannot fire work off" {
+	nothing := "proc nothing(): void \{ }\n"
+	assert opens(problem(nothing + inMain("for i := 0; i < 3; async nothing() \{ }")),
+		"loader: a loop's post clause cannot be an `async` statement")
+}
+
+test "main takes nothing and answers with nothing" {
+	assert opens(problem("proc main(args: Str[]): void \{ }"),
+		"in `main`: `main` is where the program starts")
+	assert opens(problem("proc main(): Int \{ return 0 }"),
+		"in `main`: `main` is where the program starts")
+}
+
+test "an assert that holds carries on, so it does not end a path" {
+	assert opens(problem("func f(n: Int): Int \{ if n > 0 \{ return 1 }  assert n == 0 }"),
+		"in `f`: `f` answers with Int, so every path through it has to return one")
+	assert problemCount("func f(n: Int): Int \{ if n > 0 \{ return 1 }  hive.term.exit(1) }") == 0
+}
+
+test "two tests cannot answer to one title" {
+	assert opens(problem("test \"adds\" \{ assert true }\ntest \"adds\" \{ assert true }"),
+		"in `\"adds\"`: another test is already called this")
+	assert opens(problem("test \"adds up\" \{ assert true }\ntest \"adds_up\" \{ assert true }"),
+		"in `\"adds_up\"`: the report writes a space in a title as `_`")
+}
+
+// --- Operators -----------------------------------------------------------------
+
+test "each operator works on what it is defined on" {
+	assert opens(problem(inMain("echo [1] < [2]")),
+		"in `main`: `<` orders an `Int`, a `Float` or a `Str`, and these are Int[1]")
+	assert opens(problem(inMain("echo \"a\" - \"b\"")),
+		"in `main`: `-` is arithmetic, on an `Int` or a `Float`, and these are Str")
+	assert opens(problem(inMain("echo #A + #B")),
+		"in `main`: `+` adds two numbers, joins two `Str`s or joins two vectors, and these are Atom")
+	assert opens(problem(inMain("echo -\"a\"")),
+		"in `main`: unary `-` negates an `Int` or a `Float`, and this is Str")
+	assert opens(problem("func two(): Int \{ return 2 }\n" + inMain("f := two  echo f == f")),
+		"in `main`: `==` compares two values, and a function value has no equality")
+	assert problemCount(inMain("echo \"a\" + \"b\"  echo [1] + [2]  echo \"a\" < \"b\"  echo 2 ** 3")) == 0
+}
+
+// --- Concurrency ---------------------------------------------------------------
+
+test "an await-all answers with one vector of one type" {
+	fs := "func one(): Int \{ return 1 }\nfunc name(): Str \{ return \"a\" }\n"
+	assert opens(problem(fs + inMain("echo await [one(), name()]")),
+		"in `main`: an await-all resolves to one vector, so its calls answer with one type")
+	assert problemCount(fs + inMain("echo await [one(), one()]")) == 0
+}
+
+test "a deadline needs a value to wait for" {
+	nothing := "proc nothing(): void \{ }\n"
+	assert opens(problem(nothing + inMain("echo nothing() with timeout 10")),
+		"in `main`: `with timeout` answers with a `Result` of what the call answers")
+}
+
+// --- Types ---------------------------------------------------------------------
+
+test "a struct cannot hold itself by value" {
+	assert opens(problem("type Node \{ value: Int  next: Node }"),
+		"in `Node`: `Node` holds itself, field by field")
+	assert opens(problem("type Node \{ next: Result<Node, Str> }"),
+		"in `Node`: `Node` holds itself, field by field")
+	assert problemCount("type Node \{ value: Int  children: Node[dyn] }") == 0
+	assert problemCount("type Tree \{ Leaf  Branch \{ left: Tree  right: Tree } }") == 0
+}
+
+test "a union value has only the fields declared outside its variants" {
+	shape := "type Shape \{ name: Str  Circle \{ radius: Float }  Square \{ side: Float  label: Str } }\n"
+	assert problemCount(shape + inMain("s := Shape.Circle(1.0, \"c\")  echo s.name")) == 0
+	assert opens(problem(shape + inMain("s := Shape.Circle(1.0, \"c\")  echo s.label")),
+		"in `main`: `label` belongs to the variant `Square` rather than to every `Shape`")
+	both := "type Pet \{ Cat \{ name: Str }  Dog \{ name: Str } }\n"
+	assert opens(problem(both + inMain("p := Pet.Cat(\"tom\")  echo p.name")),
+		"in `main`: `name` is declared inside the variants of `Pet` rather than outside them")
+}
+
+test "a union value is built whole, never assigned into" {
+	shape := "type Shape \{ name: Str  Circle \{ radius: Float } }\n"
+	assert opens(problem(shape + inMain("mut s := Shape.Circle(1.0, \"c\")  s.name = \"d\"")),
+		"in `main`: a value of a union is taken apart with `is` and built whole")
+}
+
+// --- What cannot become a value --------------------------------------------------
+
+test "a builtin or a library call cannot become a value" {
+	assert opens(problem(inMain("f := hive.len")),
+		"in `main`: `hive.len` is a builtin, so it cannot be used as a value")
+	assert opens(problem(inMain("f := hive.conv.its")),
+		"in `main`: `hive.conv.its` is a library call, and a library call cannot be used as a value")
+	assert opens(problem(inMain("f := join(_, \",\")")),
+		"in `main`: `join` cannot be partially applied")
+	assert opens(problem(inMain("f := hive.conv.its(_)")),
+		"in `main`: `hive.conv.its` cannot be partially applied")
+}
+
+test "a builtin or a library call takes its arguments by position" {
+	assert opens(problem(inMain("echo join(vector: [\"a\"], separator: \",\")")),
+		"in `main`: `join` takes its arguments by position")
+	assert opens(problem(inMain("echo hive.math.clamp(value: 3.0, low: 0.0, high: 1.0)")),
+		"in `main`: `hive.math.clamp` takes its arguments by position")
+	assert problemCount(inMain("echo hive.math.clamp(3.0, 0.0, 1.0)")) == 0
+}
+
+// --- Queries -------------------------------------------------------------------
+
+test "a query can answer with every column as text" {
+	assert problemCount("query everything(): Table \{ SELECT * FROM users }") == 0
+	assert opens(problem("query counts(): Int[dyn][dyn] \{ SELECT a, b FROM t }"),
+		"in `counts`: a query answers with whole rows of text as a `Table`")
+}
+
+test "a function value fills only a slot whose calls it can take" {
+	takes := "proc takes(v: Str[3]): void \{ echo v[2] }\n"
+	assert opens(problem(takes + inMain("proc(Str[]): void f = takes")),
+		"in `main`: the declaration of `f` wants proc(Str[]): void and this is proc(Str[3]): void")
+	assert opens(problem(takes + "proc hand(f: proc(Str[dyn]): void): void \{ }\n" + inMain("hand(takes)")),
+		"in `main`: the argument `f` of `hand` wants proc(Str[dyn]): void and this is proc(Str[3]): void")
+	assert problemCount(takes + "proc hand(f: proc(Str[3]): void): void \{ f([\"a\", \"b\", \"c\"]) }\n" + inMain("hand(takes)  fs := [takes]  mut g := takes  g([\"x\", \"y\", \"z\"])")) == 0
+	// The other way round is safe: a taker of any length fills a slot that promises three.
+	assert problemCount("proc any(v: Str[]): void \{ }\n" + inMain("proc(Str[3]): void f = any  f([\"a\", \"b\", \"c\"])")) == 0
 }

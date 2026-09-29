@@ -524,21 +524,15 @@ func exposed(needs: Needs): Str {
 		}
 		return join(out, "\n")
 	}
-	if needs.serves {
-		append(out, `
-			# This program starts a server, but nothing in it says on which port: every
-			# one it starts is handed a port worked out while it runs — from a variable,
-			# or out of the environment. So 8080 is the usual default rather than
-			# anything read off the program: change it to whatever this one listens on.
-		`)
-	} else {
-		append(out, `
-			# Nothing in this program opens a port, so this is a default rather than an
-			# observation: 8080 is here because a container usually wants one. Change it
-			# to whatever this program comes to listen on, or drop the line — a program
-			# that listens on nothing has no use for it.
-		`)
+	if needs.serves == false {
+		return "# Nothing in this program opens a port, so nothing is exposed."
 	}
+	append(out, `
+		# This program starts a server, but nothing in it says on which port: every
+		# one it starts is handed a port worked out while it runs — from a variable,
+		# or out of the environment. So 8080 is the usual default rather than
+		# anything read off the program: change it to whatever this one listens on.
+	`)
 	append(out, "EXPOSE 8080")
 	return join(out, "\n")
 }

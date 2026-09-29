@@ -49,13 +49,13 @@ func goNameOf(module: Str, name: Str): Str {
 //
 // Most of it is read off `resultOf`, which answers `TUnknown` for a name its module
 // does not have. Four cannot be read that way — `task`, `map`, `json` and `crypto`
-// — so those are named in full.
+// — so those are named in full, as is `ui.window`, whose answer is its argument.
 func hasName(module: Str, name: Str): Bool {
 	if isLibType(module, name) {
 		return true
 	}
 	if module == "task" {
-		return name == "sleep"
+		return name == "sleep" || name == "sleepForever"
 	}
 	if module == "map" {
 		return name == "new" || name == "set" || name == "get" || name == "has"
@@ -72,6 +72,9 @@ func hasName(module: Str, name: Str): Bool {
 		if name == "run" {
 			return true
 		}
+	}
+	if module == "ui" && name == "window" {
+		return true
 	}
 	if resultOf(module, name, []) is types.Ty.TUnknown {
 		return false
@@ -101,7 +104,7 @@ func resultOf(module: Str, name: Str, args: types.Ty[]): types.Ty {
 	if module == "net" { return netResult(name) }
 	if module == "sql" { return sqlResult(name, args) }
 	if module == "syslink" { return syslinkResult(name) }
-	if module == "ui" { return uiResult(name) }
+	if module == "ui" { return uiResult(name, args) }
 	return types.Ty.TUnknown()
 }
 
@@ -351,17 +354,9 @@ func codecFormats(): Str[dyn] {
 	return ["json", "jwt", "query", "term"]
 }
 
-// A service is reached by calling its address, so most of this module is about
-// getting one: `spawn` starts a service, `at` and `on` name one that already
-// exists, `register` publishes it. The three that build an address do no I/O.
 func syslinkResult(name: Str): types.Ty {
-	address := types.Ty.TLib("syslink", "Address")
 	syslinkError := types.Ty.TLib("syslink", "SyslinkError")
-	if name == "spawn" || name == "spawnAddressed" || name == "at" || name == "on" {
-		return address
-	}
-	if name == "register" { return types.Ty.TResult(address, syslinkError) }
-	if name == "stop" || name == "monitor" {
+	if name == "monitor" {
 		return types.Ty.TVoid()
 	}
 	if name == "listen" {
@@ -496,9 +491,6 @@ func isOpaque(module: Str, name: Str): Bool {
 	}
 	if module == "sql" {
 		return name == "SqlConnection"
-	}
-	if module == "syslink" {
-		return name == "Address"
 	}
 	// A view, an attribute, a shape, and the enumerations. Registering them is
 	// what lets a `func` answering with a `hive.ui.View` be written down.
@@ -797,15 +789,16 @@ func isUiScene(name: Str): Bool {
 		|| name == "onPad" || name == "onSize"
 }
 
-func uiResult(name: Str): types.Ty {
+func uiResult(name: Str, args: types.Ty[]): types.Ty {
 	if isUiWidget(name) { return types.Ty.TLib("ui", "View") }
 	if isUiShape(name) { return types.Ty.TLib("ui", "Shape") }
 	if isUiMark(name) { return types.Ty.TLib("ui", "Mark") }
 	if isUiAttr(name) { return types.Ty.TLib("ui", "Attr") }
 	if name == "html" || name == "page" { return types.Ty.TStr() }
-	// A window does not return: it shows the view and folds events until the
-	// program ends.
-	if name == "window" || name == "windowAddressed" { return types.Ty.TVoid() }
+	// A window is a `spawn` handler of the same shape as its `update`.
+	if name == "window" && args bounds 2 {
+		return args[2]
+	}
 	return types.Ty.TUnknown()
 }
 
@@ -872,8 +865,8 @@ func uiParams(name: Str): types.Ty[dyn] {
 	}
 	if name == "html" { return [view] }
 	if name == "page" { return [str, view] }
-	if name == "window" || name == "windowAddressed" {
-		return [str, types.Ty.TUnknown(), types.Ty.TUnknown(), types.Ty.TUnknown()]
+	if name == "window" {
+		return [str, types.Ty.TUnknown(), types.Ty.TUnknown()]
 	}
 	// An event takes the message itself, or a function to one. What its handler
 	// is *handed* when it fires is `uiEventArgs`, which is a different question.
@@ -987,7 +980,10 @@ func paramsOf(module: Str, name: Str): types.Ty[dyn] {
 	}
 	if module == "math" { return mathParams(name) }
 	if module == "env" { return [types.Ty.TStr()] }
-	if module == "task" { return [types.Ty.TInt()] }
+	if module == "task" {
+		if name == "sleepForever" { return [] }
+		return [types.Ty.TInt()]
+	}
 	if module == "time" { return timeParams(name) }
 	if module == "json" { return [] }
 	if module == "map" { return mapParams(name) }
@@ -1040,16 +1036,9 @@ func mapParams(name: Str): types.Ty[dyn] {
 }
 
 func syslinkParams(name: Str): types.Ty[dyn] {
-	address := types.Ty.TLib("syslink", "Address")
-	any := types.Ty.TUnknown()
-	// A service name is an atom, which lets the compiler know the registry.
-	if name == "at" { return [types.Ty.TAtom()] }
-	if name == "on" { return [types.Ty.TStr(), types.Ty.TAtom()] }
-	if name == "register" { return [types.Ty.TAtom(), address] }
-	if name == "stop" { return [address] }
+	address := types.Ty.TAddress()
 	if name == "listen" { return [types.Ty.TStr()] }
-	if name == "spawn" || name == "spawnAddressed" { return [any, any] }
-	if name == "monitor" { return [address, address, any] }
+	if name == "monitor" { return [address, address, types.Ty.TUnknown()] }
 	// `node` and `peers` ask for nothing.
 	return []
 }

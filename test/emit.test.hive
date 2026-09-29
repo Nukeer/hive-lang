@@ -225,7 +225,13 @@ test "a local carries its Hive type, and the assignment that says Go it was used
 	// Written with the type rather than with `:=`, because the two do not always
 	// agree — see the emitter's own note on it.
 	got := stmt("x := 1")
-	assert has(got, "var x int = 1\n\t_ = x")
+	assert has(got, "var x int = 1\n\t\t_ = x")
+}
+
+test "main's body returns into a wait for the windows it opened" {
+	got := stmt("echo 1")
+	assert has(got, "\tfunc() \{\n")
+	assert has(got, "\t}()\n\thive.MainReturned()\n}")
 }
 
 test "a for-each is a range, and a counting loop is a for" {
@@ -265,7 +271,7 @@ test "an atom a declaration below main mentions is still on the table" {
 test "async is go, and echo, assert and panic each go through the runtime" {
 	assert has(go("proc f(): void \{ }\nproc main(): void \{ async f() }"), "go f()")
 	assert has(stmt("echo 1"), "hive.Echo(1)")
-	assert has(stmt("assert true"), "hive.Assert(true)")
+	assert has(stmt("assert true"), "hive.Assert(true, \"true\")")
 	assert has(stmt("panic \"no\""), "panic(hive.Show(\"no\"))")
 }
 
@@ -447,9 +453,14 @@ test "a program that opens a window says so, and one that only renders does not"
 	window := "type Msg \{ Bumped }" + newline()
 		+ "func view(n: Int): hive.ui.View \{ return hive.ui.text([], \"n\") }" + newline()
 		+ "proc up(n: mut Int, m: Msg): Msg \{ n += 1  return m }" + newline()
-		+ "proc main(): void \{ hive.ui.window(\"T\", view, up, 0) }"
+		+ "proc main(): void \{ w := spawn(hive.ui.window(\"T\", view, up), 0) }"
 	assert windowed(window)
-	assert has(go(window), "hive.UiWindow(")
+	assert has(go(window), "hive.SyslinkSpawn(hive.UiWindow(\"T\", view, up), hive.SyslinkUnnamed, 0, ")
+	loud :="type Msg \{ Bumped }" + newline()
+		+ "func view(n: Int): hive.ui.View \{ return hive.ui.text([], \"n\") }" + newline()
+		+ "proc up(n: mut Int, m: Msg, me: Address): Msg \{ return m }" + newline()
+		+ "proc main(): void \{ w := spawn(hive.ui.window(\"T\", view, up), 0) }"
+	assert has(go(loud), "hive.SyslinkSpawnAddressed(hive.UiWindowAddressed(\"T\", view, up), hive.SyslinkUnnamed, 0, ")
 	// The same view, served instead. This one prints, so it keeps the console a
 	// window is linked without.
 	served := "func view(): hive.ui.View \{ return hive.ui.text([], \"n\") }" + newline()
@@ -620,7 +631,7 @@ test "a JsonValue reads and writes the document as it is" {
 }
 
 test "a message carrying a Table is refused where its codec is derived" {
-	got := go("type Msg \{ Rows \{ rows: Table } }\nproc inbox(state: mut Int, m: Msg): Msg \{ return m }\nproc main(): void \{ a := hive.syslink.spawn(inbox, 0)  a(Msg.Rows([])) }")
+	got := go("type Msg \{ Rows \{ rows: Table } }\nproc inbox(state: mut Int, m: Msg): Msg \{ return m }\nproc main(): void \{ if spawn(inbox, 0) is Result.Ok(a) \{ a(Msg.Rows([])) } }")
 	assert text.startsWith(got, "emit: a `Table` — `Str[dyn][dyn]` — has no JSON of its own")
 }
 
@@ -683,7 +694,7 @@ test "an argument a thread may still hold is copied even when it comes back" {
 
 test "a send carries an encoder, a digest and the decoder for the answer" {
 	program := "type Note \{ Say \{ text: Str }\n Counted \{ seen: Int } }\nproc inbox(seen: mut Int, note: Note): Note \{ return Note.Counted(seen) }\n"
-	got := go(program + "proc main(): void \{ box := hive.syslink.spawn(inbox, 0)  async box(Note.Say(\"hi\"))  if box(Note.Say(\"hi\")) is Result.Ok(reply) \{ echo reply } }")
+	got := go(program + "proc main(): void \{ spawned := spawn(inbox, 0, #Inbox)  box := at(#Inbox)  async box(Note.Say(\"hi\"))  if box(Note.Say(\"hi\")) is Result.Ok(reply) \{ echo reply } }")
 	// Fire and forget is a cast; the same call kept is a request.
 	assert has(got, "hive.SyslinkSend(")
 	assert has(got, "hive.SyslinkSendAwaitable(")
@@ -698,13 +709,28 @@ test "a send carries an encoder, a digest and the decoder for the answer" {
 
 test "a service writes its state through a pointer and hands back a copy of each answer" {
 	quiet := "proc quiet(n: mut Int, note: Note): Note \{ return note }\n"
-	loud := "proc loud(n: mut Int, note: Note, me: hive.syslink.Address): Note \{ return note }\n"
+	loud := "proc loud(n: mut Int, note: Note, me: Address): Note \{ return note }\n"
 	program := "type Note \{ Say \{ text: Str } }\n" + quiet + loud
-	got := go(program + "proc main(): void \{ echo hive.syslink.spawn(quiet, 0)  echo hive.syslink.spawnAddressed(loud, 0) }")
+	got := go(program + "proc main(): void \{ echo spawn(quiet, 0)  echo spawn(loud, 0, #Loud) }")
 	assert has(got, "func quiet(n *int, note Note) Note \{")
-	assert has(got, "hive.SyslinkSpawn(quiet, 0, hive.SyslinkDecoder(jsonDecode_Note), hive.SyslinkDigest(\"Note\{Say,text:Str}\"), hive.SyslinkEncoder(")
-	assert has(got, "hive.SyslinkSpawnAddressed(loud, 0, hive.SyslinkDecoder(jsonDecode_Note)")
+	assert has(got, "func loud(n *int, note Note, me hive.SyslinkAddress) Note \{")
+	assert has(got, "hive.SyslinkSpawn(quiet, hive.SyslinkUnnamed, 0, hive.SyslinkDecoder(jsonDecode_Note), hive.SyslinkDigest(\"Note\{Say,text:Str}\"), hive.SyslinkEncoder(")
+	assert has(got, "hive.SyslinkSpawnAddressed(loud, hive.Atom(1), 0, hive.SyslinkDecoder(jsonDecode_Note)")
 	assert has(got, "func(_v Note) Note \{ return ")
+}
+
+test "at builds an address on this node or another, and kill stops what it names" {
+	got := go("proc main(): void \{ here := at(#Cache)  there := at(\"10.0.0.4:9000\", #Cache)  kill(here)  hive.kill(there) }")
+	assert has(got, "hive.SyslinkAt(hive.Atom(1))")
+	assert has(got, "hive.SyslinkOn(\"10.0.0.4:9000\", hive.Atom(1))")
+	assert has(got, "hive.SyslinkKill(here)")
+	assert has(got, "hive.SyslinkKill(there)")
+}
+
+test "an address inside a message goes into its digest as the builtin it is" {
+	program := "type Note \{ Sit \{ post: Address } }\nproc desk(n: mut Int, note: Note): Note \{ return note }\n"
+	got := go(program + "proc main(): void \{ echo spawn(desk, 0) }")
+	assert has(got, "hive.SyslinkDigest(\"Note\{Sit,post:Address}\")")
 }
 
 // --- Windows -----------------------------------------------------------------
@@ -787,4 +813,61 @@ test "a name an `is` binds outside an `if` reaches the rest of the condition" {
 	got := stmt("r := hive.conv.sti(\"1\")\nb := r is Result.Ok(n) && n == 1\necho b")
 	assert has(got, "func() bool \{")
 	assert has(got, "n := _t")
+}
+
+// --- Fixes the checker could not see -----------------------------------------------
+
+test "a union's shared field is read through the interface" {
+	got := go("type Event \{ at: Int  Opened \{ by: Str }  Closed }" + newline() + "func when(e: Event): Int \{ return e.at }")
+	assert has(got, "sharedAt() int")
+	assert has(got, "func (v EventOpened) sharedAt() int \{ return v.At }")
+	assert has(got, "return e.sharedAt()")
+}
+
+test "a union registers the order its variants were declared in" {
+	got := go("type Level \{ Low  High }")
+	assert has(got, "func init() \{ hive.RegisterVariants([]string\{\"LevelLow\", \"LevelHigh\"}) }")
+}
+
+test "`_` discards a value, and an async one still runs" {
+	got := go("func one(): Int \{ return 1 }" + newline() + "proc main(): void \{ _ := one()  _ := async one()  later := async one() }")
+	assert has(got, "_ = one()")
+	assert has(got, "_task__discard")
+	assert has(got, "_ = _task_later")
+}
+
+test "a partial application captures what it was given where it was written" {
+	got := go("func add(a: Int, b: Int): Int \{ return a + b }" + newline() + "proc main(): void \{ mut n := 1  f := add(n, _)  n = 2  echo f(1) }")
+	assert has(got, "func(_c")
+	assert has(got, "}(n)")
+}
+
+test "named arguments written out of order are worked out in the order written" {
+	got := go("func side(s: Str): Str \{ return s }" + newline() + "func pair(a: Str, b: Str): Str \{ return a + b }" + newline() + "proc main(): void \{ echo pair(b: side(\"b\"), a: side(\"a\")) }")
+	assert has(got, "(side(\"b\"), side(\"a\"))")
+	ordered := go("func side(s: Str): Str \{ return s }" + newline() + "func pair(a: Str, b: Str): Str \{ return a + b }" + newline() + "proc main(): void \{ echo pair(a: side(\"a\"), b: side(\"b\")) }")
+	assert has(ordered, "pair(side(\"a\"), side(\"b\"))")
+}
+
+test "a failed assert outside a test says what it asserted" {
+	got := stmt("x := 1  assert x == 2")
+	assert has(got, "hive.AssertCmp(")
+	assert has(got, "\"x == 2\"")
+	assert has(stmt("x := true  assert x"), "hive.Assert(x, \"x\")")
+}
+
+test "a query declared as a Table runs through the table reader" {
+	got := go("import hive.sql" + newline() + "query everything(): Table \{ SELECT * FROM users }" + newline() + "proc main(): void \{ db := sql.connect(sql.DatabaseDriver.SQLite(), \":memory:\")  if db is Result.Ok(c) \{ echo sql.run(c, everything()) } }")
+	assert has(got, "hive.SqlTable(")
+}
+
+test "Int arithmetic stops at an edge rather than wrapping" {
+	got := stmt("a := 1  b := 2  echo a + b  echo a - b  echo a * b  echo -a")
+	assert has(got, "hive.AddInt(a, b)")
+	assert has(got, "hive.SubInt(a, b)")
+	assert has(got, "hive.MulInt(a, b)")
+	assert has(got, "hive.NegInt(a)")
+	// A Float is Go's own, and a negative literal needs no helper.
+	assert has(stmt("x := 1.5  echo x + 2.0  echo -3"), "(x + 2.0)")
+	assert has(stmt("echo -3"), "-(3)")
 }

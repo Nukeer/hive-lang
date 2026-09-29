@@ -131,7 +131,6 @@ import ./lib/scenery
 import ./lib/wire
 import hive.ui
 import hive.net
-import hive.syslink
 import hive.math
 import hive.conv
 
@@ -378,7 +377,7 @@ func seatOf(team: Str): Int {
 // The window's handler
 // ---------------------------------------------------------------------------
 
-proc update(model: mut Model, msg: Msg, window: hive.syslink.Address): Msg {
+proc update(model: mut Model, msg: Msg, window: Address): Msg {
 	if msg is Msg.Tick(ms) {
 		model = ticked(model, math.min(0.05, conv.itf(ms) / 1000.0))
 	} else if msg is Msg.Pressed(key) {
@@ -739,7 +738,7 @@ func noted(at: Control[], control: Str, now: Float): Control[dyn] {
 // Joining. `wsConnect` is I/O, and a handler is a `proc`, so it can simply do it —
 // there is no command to return and nothing to arrange. What it must not do is
 // *wait* for the answer, so the reply arrives as a message like everything else.
-proc joining(model: mut Model, window: hive.syslink.Address): void {
+proc joining(model: mut Model, window: Address): void {
 	opened := hive.net.wsConnect(model.server)
 	if opened is Result.Error(problem) {
 		model.trouble = "{problem.reason} — {problem.message}"
@@ -755,7 +754,7 @@ proc joining(model: mut Model, window: hive.syslink.Address): void {
 
 // The reader. One thread, one loop, and everything it decodes posted at the window
 // — which is why there is no queue in this program and nothing is locked.
-proc listening(connection: hive.net.WsConnection, window: hive.syslink.Address): void {
+proc listening(connection: hive.net.WsConnection, window: Address): void {
 	for ;; {
 		heard := hive.net.wsReceive(connection)
 		if heard is Result.Error(problem) {
@@ -2751,8 +2750,8 @@ proc main(): void {
 			server = args[0]
 		}
 	}
-	// Opens a real application window. The window *is* a service, and
-	// `ui.windowAddressed` hands `update` its address, which is how the thread
+	// Opens a real application window. The window *is* a service, started like
+	// any other, and `update` takes its address third, which is how the thread
 	// reading the socket posts back into it.
-	ui.windowAddressed("Formula Kart", view, update, start(seed, server))
+	spawn(ui.window("Formula Kart", view, update), start(seed, server))
 }

@@ -50,9 +50,9 @@ func assetsSource(): Str {
 		import "embed"
 
 		//go:embed assets
-		var uiSceneAssetDir embed.FS
+		var uiAssetDir embed.FS
 
-		func init() \{ uiSceneAssetsAre(uiSceneAssetDir) }
+		func init() \{ uiAssetsAre(uiAssetDir) }
 	`
 }
 
@@ -399,9 +399,15 @@ func coreShow(): Str {
 		// Assert panics when a runtime assertion fails. Inside a test it is a
 		// recorded failure instead — see TestAssert.
 		`
-		func Assert(cond bool) \{
+		func Assert(cond bool, text string) \{
 			if !cond \{
-				panic("hive: assertion failed")
+				panic("hive: assertion failed: " + text)
+			}
+		}
+
+		func AssertCmp(cond bool, text string, left string, right string) \{
+			if !cond \{
+				panic("hive: assertion failed: " + text + "\n  left:  " + left + "\n  right: " + right)
 			}
 		}
 		`
@@ -570,6 +576,9 @@ func coreOrder(): Str {
 			if a.Kind() == reflect.Interface \{
 				return lessInterface(a, b)
 			}
+			if a.Type() != b.Type() \{
+				return lessVariant(a, b)
+			}
 			switch a.Kind() \{
 			case reflect.Bool:
 				return !a.Bool() && b.Bool()
@@ -594,13 +603,16 @@ func coreOrder(): Str {
 			if a.IsNil() || b.IsNil() \{
 				return !a.IsNil() && b.IsNil()
 			}
-			left, right := a.Elem(), b.Elem()
-			li, lok := variantOrder[left.Type().Name()]
-			ri, rok := variantOrder[right.Type().Name()]
-			if lok && rok && li != ri \{
+			return lessValue(a.Elem(), b.Elem())
+		}
+
+		func lessVariant(a, b reflect.Value) bool \{
+			li, lok := variantOrder[a.Type().Name()]
+			ri, rok := variantOrder[b.Type().Name()]
+			if lok && rok \{
 				return li < ri
 			}
-			return lessValue(left, right)
+			return a.Type().Name() < b.Type().Name()
 		}
 		`,
 		// Lexicographic by element, and on a shared prefix the shorter one first.
@@ -880,15 +892,69 @@ func coreStrings(): Str {
 
 func coreArithmetic(): Str {
 	return join([
-		// Dividing — or taking a remainder — by zero is a value rather than a
-		// crash, which is the one place Hive's arithmetic differs from Go's.
+		// Dividing — or taking a remainder — by zero is a value rather than a crash.
 		`
 		func DivInt(a, b int) int \{
 			if b == 0 \{
 				return 0
 			}
+			if a == math.MinInt && b == -1 \{
+				return math.MaxInt
+			}
 			return a / b
 		}
+
+		// Unfolded keeps Go from folding two Float literals at compile time, where
+		// an overflow is refused rather than reaching infinity.
+		func Unfolded(v float64) float64 \{ return v }
+		`,
+		// An Int that would pass either edge stays at it: MAX + 1 is MAX, and
+		// MIN - 1 is MIN.
+		`
+		func AddInt(a, b int) int \{
+			s := a + b
+			if b > 0 && s < a \{
+				return math.MaxInt
+			}
+			if b < 0 && s > a \{
+				return math.MinInt
+			}
+			return s
+		}
+
+		func SubInt(a, b int) int \{
+			d := a - b
+			if b > 0 && d > a \{
+				return math.MinInt
+			}
+			if b < 0 && d < a \{
+				return math.MaxInt
+			}
+			return d
+		}
+
+		func MulInt(a, b int) int \{
+			if a == 0 || b == 0 \{
+				return 0
+			}
+			p := a * b
+			if p/b != a || (a == -1 && b == math.MinInt) || (b == -1 && a == math.MinInt) \{
+				if (a < 0) != (b < 0) \{
+					return math.MinInt
+				}
+				return math.MaxInt
+			}
+			return p
+		}
+
+		func NegInt(a int) int \{
+			if a == math.MinInt \{
+				return math.MaxInt
+			}
+			return -a
+		}
+		`,
+		`
 
 		func DivFloat(a, b float64) float64 \{
 			if b == 0 \{
@@ -913,16 +979,48 @@ func coreArithmetic(): Str {
 			return math.Mod(a, b)
 		}
 		`,
-		// ** on Ints is repeated multiplication, and wraps the same way every other
-		// Int operator does. A negative exponent has no integral answer, so it is 0.
+		// ** on Ints stops at an edge the way every other Int operator does. A
+		// negative exponent has no integral answer, so it is 0.
 		`
 		func PowInt(a, b int) int \{
 			if b < 0 \{
 				return 0
 			}
+			negative := a < 0 && b%2 == 1
+			edge := math.MaxInt
+			if negative \{
+				edge = math.MinInt
+			}
+			if a == math.MinInt \{
+				if b == 0 \{
+					return 1
+				}
+				if b == 1 \{
+					return a
+				}
+				return edge
+			}
+			m := a
+			if m < 0 \{
+				m = -m
+			}
+			if m == 0 \{
+				if b == 0 \{
+					return 1
+				}
+				return 0
+			}
 			out := 1
-			for i := 0; i < b; i++ \{
-				out = out * a
+			if m > 1 \{
+				for i := 0; i < b; i++ \{
+					if out > math.MaxInt/m \{
+						return edge
+					}
+					out *= m
+				}
+			}
+			if negative \{
+				return -out
 			}
 			return out
 		}
@@ -1220,6 +1318,43 @@ func coreTasks(): Str {
 		func TaskSleep(ms int) \{
 			if ms > 0 \{
 				time.Sleep(time.Duration(ms) * time.Millisecond)
+			}
+		}
+		`,
+		// Not an empty select, which Go reports as a deadlock when nothing else can run.
+		`
+		func TaskSleepForever() \{
+			for \{
+				time.Sleep(time.Hour)
+			}
+		}
+		`,
+		// Open windows: the last to close ends the program, so a returning `main` waits.
+		`
+		var holding struct \{
+			mu    sync.Mutex
+			count int
+		}
+
+		func Hold() \{
+			holding.mu.Lock()
+			holding.count++
+			holding.mu.Unlock()
+		}
+
+		func Release() int \{
+			holding.mu.Lock()
+			defer holding.mu.Unlock()
+			holding.count--
+			return holding.count
+		}
+
+		func MainReturned() \{
+			holding.mu.Lock()
+			held := holding.count > 0
+			holding.mu.Unlock()
+			if held \{
+				TaskSleepForever()
 			}
 		}
 		`
@@ -1962,6 +2097,8 @@ func envSource(): Str {
 
 		import (
 			"os"
+			"path/filepath"
+			"slices"
 			"strings"
 			"sync"
 		)
@@ -1977,7 +2114,21 @@ func envSource(): Str {
 		// The .env file is read once, when the first get runs.
 		`
 		func loadEnvFile() \{
-			for _, path := range []string\{".env", "../.env"} \{
+			dirs := []string\{}
+			if exe, err := os.Executable(); err == nil \{
+				dirs = append(dirs, filepath.Dir(exe))
+			}
+			if wd, err := os.Getwd(); err == nil \{
+				dirs = append(dirs, wd)
+			}
+			paths := []string\{}
+			for _, dir := range append(append([]string\{}, dirs...), parentsOf(dirs)...) \{
+				path := filepath.Join(dir, ".env")
+				if !slices.Contains(paths, path) \{
+					paths = append(paths, path)
+				}
+			}
+			for _, path := range paths \{
 				data, err := os.ReadFile(path)
 				if err != nil \{
 					continue
@@ -2002,8 +2153,18 @@ func envSource(): Str {
 			}
 		}
 		`,
-		// Resolved in this order: the .env in the program's own folder, the .env in
-		// the parent folder, and then the OS environment.
+		`
+		func parentsOf(dirs []string) []string \{
+			out := []string\{}
+			for _, dir := range dirs \{
+				out = append(out, filepath.Dir(dir))
+			}
+			return out
+		}
+		`,
+		// Resolved in this order: the .env beside the executable, the one in the
+		// working directory, the one in the parent of either, and then the OS
+		// environment.
 		`
 		func EnvGet(name string) Result[string, EnvEnvironmentError] \{
 			envOnce.Do(loadEnvFile)
@@ -2188,6 +2349,7 @@ func jsonSource(): Str {
 
 		import (
 			"encoding/json"
+			"io"
 			"strconv"
 			"strings"
 		)
@@ -2241,6 +2403,7 @@ func jsonSource(): Str {
 			case json.Delim:
 				if x == '\{' \{
 					obj := []JsonMember\{}
+					at := map[string]int\{}
 					for d.More() \{
 						kt, err := d.Token()
 						if err != nil \{
@@ -2251,6 +2414,12 @@ func jsonSource(): Str {
 						if err != nil \{
 							return JsonValue\{}, err
 						}
+						// A key written twice keeps the last value, where the first one stood.
+						if i, seen := at[key]; seen \{
+							obj[i].Value = val
+							continue
+						}
+						at[key] = len(obj)
 						obj = append(obj, JsonMember\{Key: key, Value: val})
 					}
 					if _, err := d.Token(); err != nil \{
@@ -2305,6 +2474,9 @@ func jsonSource(): Str {
 			v, err := parseJsonValue(d)
 			if err != nil \{
 				return Err[T, JsonJsonError](JsonJsonError\{Path: "$", Expected: "valid JSON", Found: err.Error()})
+			}
+			if _, err := d.Token(); err != io.EOF \{
+				return Err[T, JsonJsonError](JsonJsonError\{Path: "$", Expected: "the end of the document", Found: "more text after it"})
 			}
 			out, jerr := dec(v, "$")
 			if jerr != nil \{
@@ -2566,8 +2738,12 @@ func csvSource(): Str {
 			if err != nil \{
 				return Err[Table, FileTableError](FileTableError\{Path: path, Message: err.Error()})
 			}
-			reader := csv.NewReader(strings.NewReader(string(raw)))
+			// Spreadsheets often save CSV with a byte-order mark.
+			reader := csv.NewReader(strings.NewReader(strings.TrimPrefix(string(raw), "\uFEFF")))
 			reader.FieldsPerRecord = -1
+			if len([]rune(separator)) > 1 \{
+				return Err[Table, FileTableError](FileTableError\{Path: path, Message: "a separator is one character, and \"" + separator + "\" is more"})
+			}
 			if len(separator) > 0 \{
 				reader.Comma = []rune(separator)[0]
 			}
@@ -5011,11 +5187,11 @@ func sqlSource(): Str {
 		func SqlConnect(driver SqlDatabaseDriver, connString string) Result[SqlSqlConnection, SqlSqlError] \{
 			db, err := sql.Open(sqlDriverName(driver), connString)
 			if err != nil \{
-				return Err[SqlSqlConnection, SqlSqlError](SqlSqlError\{Reason: "Query", Message: err.Error()})
+				return Err[SqlSqlConnection, SqlSqlError](SqlSqlError\{Reason: "Connection", Message: err.Error()})
 			}
 			if err := db.Ping(); err != nil \{
 				db.Close()
-				return Err[SqlSqlConnection, SqlSqlError](SqlSqlError\{Reason: "Query", Message: err.Error()})
+				return Err[SqlSqlConnection, SqlSqlError](SqlSqlError\{Reason: "Connection", Message: err.Error()})
 			}
 			return Ok[SqlSqlConnection, SqlSqlError](SqlSqlConnection\{db: db, driver: sqlDriverName(driver)})
 		}
@@ -5050,7 +5226,19 @@ func sqlSource(): Str {
 			if conn.db == nil \{
 				return Err[Table, SqlSqlError](SqlSqlError\{Reason: "Connection", Message: "connection is not open"})
 			}
-			rows, err := conn.db.Query(query)
+			return sqlTable(conn.db.Query(query))
+		}
+
+		// SqlTable is what a query declared as a Table runs through: the same answer,
+		// with its values bound.
+		func SqlTable(conn SqlSqlConnection, stmt SqlFragment) Result[Table, SqlSqlError] \{
+			if conn.db == nil \{
+				return Err[Table, SqlSqlError](SqlSqlError\{Reason: "Connection", Message: "connection is not open"})
+			}
+			return sqlTable(conn.db.Query(sqlPlaceholders(conn, stmt.Text), stmt.Args...))
+		}
+
+		func sqlTable(rows *sql.Rows, err error) Result[Table, SqlSqlError] \{
 			if err != nil \{
 				return Err[Table, SqlSqlError](SqlSqlError\{Reason: "Query", Message: err.Error()})
 			}
@@ -5117,6 +5305,7 @@ func syslinkSource(): Str {
 			"sync"
 			"sync/atomic"
 			"time"
+			"unsafe"
 		)
 		`,
 		// atomNone is the "no atom" sentinel. Zero is taken (#Nil), so a negative
@@ -5378,6 +5567,7 @@ func syslinkSource(): Str {
 			b.mu.Lock()
 			if b.closed \{
 				b.mu.Unlock()
+				failDelivery(d, "Down", "the service is no longer running")
 				return
 			}
 			b.queue = append(b.queue, d)
@@ -5418,8 +5608,8 @@ func syslinkSource(): Str {
 			return b.decode(d.raw)
 		}
 		`,
-		// die closes the mailbox, unregisters it, fails every call still waiting on it
-		// and notifies its watchers.
+		// die closes the mailbox, frees its name first so whoever hears of the death can
+		// reuse it, fails every call still waiting on it and notifies its watchers.
 		`
 		func (b *mailbox) die(reason string) \{
 			b.mu.Lock()
@@ -5430,6 +5620,12 @@ func syslinkSource(): Str {
 			b.closed = true
 			ws := b.watchers
 			b.watchers = nil
+			if b.name != atomNone \{
+				slots := registrySlots()
+				if int(b.name) >= 0 && int(b.name) < len(slots) \{
+					slots[b.name].CompareAndSwap(b, nil)
+				}
+			}
 		`,
 		// Requests still queued will never be handled, so their callers are told
 		// now rather than left to wait out a timeout.
@@ -5443,12 +5639,6 @@ func syslinkSource(): Str {
 				failDelivery(d, "Down", "the service died before answering: "+reason)
 			}
 			boxes.Delete(b.id)
-			if b.name != atomNone \{
-				slots := registrySlots()
-				if int(b.name) >= 0 && int(b.name) < len(slots) \{
-					slots[b.name].CompareAndSwap(b, nil)
-				}
-			}
 			failCallsTo(b.id, reason)
 			for _, w := range ws \{
 				notifyWatcher(w)
@@ -5493,41 +5683,90 @@ func syslinkSource(): Str {
 		}
 		`,
 		`
+		const SyslinkUnnamed = atomNone
+
 		func SyslinkSpawn[S any, M any](
 			handler func(*S, M) M,
+			name Atom,
 			initial S,
 			decode func([]byte) (any, error),
 			digest uint32,
 			encode func(M) []byte,
 			clone func(M) M,
-		) SyslinkAddress \{
+		) Result[SyslinkAddress, SyslinkSyslinkError] \{
 			turn := func(state *S, msg M, _ syslinkTurn) M \{ return handler(state, msg) }
-			return spawnService(turn, initial, decode, digest, encode, clone)
+			return spawnService(starterOf(funcKey(handler)), turn, name, initial, decode, digest, encode, clone)
 		}
 
 		func SyslinkSpawnAddressed[S any, M any](
 			handler func(*S, M, SyslinkAddress) M,
+			name Atom,
 			initial S,
 			decode func([]byte) (any, error),
 			digest uint32,
 			encode func(M) []byte,
 			clone func(M) M,
-		) SyslinkAddress \{
+		) Result[SyslinkAddress, SyslinkSyslinkError] \{
 			turn := func(state *S, msg M, t syslinkTurn) M \{ return handler(state, msg, t.address()) }
-			return spawnService(turn, initial, decode, digest, encode, clone)
+			return spawnService(starterOf(funcKey(handler)), turn, name, initial, decode, digest, encode, clone)
+		}
+		`,
+		// How a window starts, found by its handler's identity: that survives the
+		// handler being stored or passed, where a method on a func type would not.
+		`
+		type syslinkStarter func(turn any, initial any) (any, func(SyslinkAddress))
+
+		var starters sync.Map
+
+		func funcKey[F any](f F) unsafe.Pointer \{
+			return *(*unsafe.Pointer)(unsafe.Pointer(&f))
 		}
 
+		func startsAs(key unsafe.Pointer, s syslinkStarter) \{
+			starters.Store(key, s)
+		}
+
+		func starterOf(key unsafe.Pointer) syslinkStarter \{
+			if s, ok := starters.Load(key); ok \{
+				return s.(syslinkStarter)
+			}
+			return nil
+		}
+		`,
+		// The name is claimed before the service runs, so a taken one starts nothing.
+		`
 		func spawnService[S any, M any](
+			starter syslinkStarter,
 			turn func(*S, M, syslinkTurn) M,
+			name Atom,
 			initial S,
 			decode func([]byte) (any, error),
 			digest uint32,
 			encode func(M) []byte,
 			clone func(M) M,
-		) SyslinkAddress \{
+		) Result[SyslinkAddress, SyslinkSyslinkError] \{
+			var started func(SyslinkAddress)
+			if starter != nil \{
+				folded, then := starter(turn, initial)
+				turn = folded.(func(*S, M, syslinkTurn) M)
+				started = then
+			}
 			b := newMailbox(decode, digest)
+			addr := SyslinkAddress\{Name: atomNone, Id: b.id, box: b}
+			if name != atomNone \{
+				b.name = name
+				slots := registrySlots()
+				if int(name) < 0 || int(name) >= len(slots) || !slots[name].CompareAndSwap(nil, b) \{
+					boxes.Delete(b.id)
+					return syslinkErr[SyslinkAddress]("Taken", "the name "+name.String()+" is already registered on this node")
+				}
+				addr = SyslinkAddress\{Endpoint: SyslinkNode(), Name: name, Id: b.id, box: b}
+			}
 			go runService(b, turn, initial, encode, clone)
-			return SyslinkAddress\{Name: atomNone, Id: b.id, box: b}
+			if started != nil \{
+				started(addr)
+			}
+			return Ok[SyslinkAddress, SyslinkSyslinkError](addr)
 		}
 
 		func runService[S any, M any](
@@ -5604,40 +5843,19 @@ func syslinkSource(): Str {
 			return "service #" + strconv.FormatUint(b.id, 10)
 		}
 		`,
-		// SyslinkStop shuts a service down. Its mailbox closes, its watchers are told,
+		// SyslinkKill shuts a service down. Its mailbox closes, its watchers are told,
 		// and calling it twice is harmless.
 		//
 		// ---------------------------------------------------------------------------
 		// The registry
 		// ---------------------------------------------------------------------------
 		`
-		func SyslinkStop(addr SyslinkAddress) \{
+		func SyslinkKill(addr SyslinkAddress) \{
 			if b, ok := resolveLocal(addr); ok \{
-				b.die("stopped")
+				b.die("killed")
 				return
 			}
 			sendFrame(addr.Endpoint, frame\{kind: kindStop, name: addr.Name, id: addr.Id})
-		}
-		`,
-		// SyslinkRegister publishes a service under a name, so another node can reach
-		// it without holding its address.
-		`
-		func SyslinkRegister(name Atom, addr SyslinkAddress) Result[SyslinkAddress, SyslinkSyslinkError] \{
-			b, ok := resolveLocal(addr)
-			if !ok \{
-				return syslinkErr[SyslinkAddress]("NoProc", "only a service running on this node can be registered")
-			}
-			slots := registrySlots()
-			if int(name) < 0 || int(name) >= len(slots) \{
-				return syslinkErr[SyslinkAddress]("NoProc", "unknown name "+name.String())
-			}
-			if !slots[name].CompareAndSwap(nil, b) \{
-				return syslinkErr[SyslinkAddress]("Taken", "the name "+name.String()+" is already registered on this node")
-			}
-			b.mu.Lock()
-			b.name = name
-			b.mu.Unlock()
-			return Ok[SyslinkAddress, SyslinkSyslinkError](SyslinkAddress\{Endpoint: SyslinkNode(), Name: name, Id: b.id, box: b})
 		}
 		`,
 		// SyslinkAt is the address of a named service on a node role. It performs no
@@ -5708,6 +5926,13 @@ func syslinkSource(): Str {
 				}
 			}
 			return nil, false
+		}
+
+		func missingLocal(addr SyslinkAddress) (string, string) \{
+			if addr.Name != atomNone \{
+				return "NoProc", "no service is registered as #" + addr.Name.String() + " on this node"
+			}
+			return "Down", "the service is no longer running"
 		}
 		`,
 		// syslinkStrict forces a local send through the same encode/decode path a
@@ -5924,6 +6149,11 @@ func syslinkSource(): Str {
 				}
 				return p
 			}
+			if addr.Endpoint == "" || addr.Endpoint == SyslinkNode() \{
+				dropRef(ref)
+				p.settle(syslinkErr[M](missingLocal(addr)))
+				return p
+			}
 			if err := sendFrame(addr.Endpoint, frame\{
 				kind:    kindRequest,
 				name:    addr.Name,
@@ -6134,6 +6364,7 @@ func syslinkNetSource(): Str {
 			"fmt"
 			"io"
 			"math/big"
+			"net"
 			"os"
 			"path/filepath"
 			"sort"
@@ -6292,8 +6523,9 @@ func syslinkNetSource(): Str {
 		`,
 		// SyslinkListen starts accepting connections from other nodes. endpoint is what
 		// this node tells peers to dial it on. The port is taken from it and bound on
-		// every interface; the whole string is advertised, which lets an address handed
-		// to one node stay dialable when passed on to a third.
+		// every interface — only a loopback host is bound as written, since nothing
+		// off this machine could dial it anyway; the whole string is advertised, which
+		// lets an address handed to one node stay dialable when passed on to a third.
 		//
 		// There is no port-mapper daemon and no cluster-wide name registry: a node is
 		// simply where it is.
@@ -6302,6 +6534,14 @@ func syslinkNetSource(): Str {
 		// Sessions
 		// ---------------------------------------------------------------------------
 		`
+		func bindHost(endpoint, port string) string \{
+			host := strings.Trim(strings.TrimSuffix(endpoint, ":"+port), "[]")
+			if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) \{
+				return host
+			}
+			return ""
+		}
+
 		func SyslinkListen(endpoint string) Result[string, SyslinkSyslinkError] \{
 			if _, err := clusterSecret(); err != nil \{
 				return syslinkErr[string]("NoKey", err.Error())
@@ -6318,7 +6558,7 @@ func syslinkNetSource(): Str {
 				return syslinkErr[string]("NoListener",
 					"~BT~"+endpoint+"~BT~ is not a host:port this node can listen on")
 			}
-			ln, err := tls.Listen("tcp", ":"+port, serverTLS(cert))
+			ln, err := tls.Listen("tcp", net.JoinHostPort(bindHost(endpoint, port), port), serverTLS(cert))
 			if err != nil \{
 				return syslinkErr[string]("NoListener", "could not listen on port "+port+": "+err.Error())
 			}
@@ -6756,7 +6996,7 @@ func syslinkNetSource(): Str {
 				}
 			case kindStop:
 				if b, ok := resolveLocal(SyslinkAddress\{Name: f.name, Id: f.id}); ok \{
-					b.die("stopped")
+					b.die("killed")
 				}
 			}
 		}
@@ -7202,6 +7442,7 @@ func uiSource(): Str {
 		package hive
 
 		import (
+			"embed"
 			"fmt"
 			"hash/fnv"
 			"hash/maphash"
@@ -9238,6 +9479,9 @@ func uiSource(): Str {
 			watchers map[NetWsConnection]uint32
 			holding  map[NetWsConnection]uint32
 			token    string
+			addr     SyslinkAddress
+			listener net.Listener
+			shut     bool
 		}
 		`,
 		// One watcher as publish found it, so the sending can happen off the lock.
@@ -9619,14 +9863,8 @@ func uiSource(): Str {
 			return text[:at], position
 		}
 		`,
-		// Closing the window ends the program.
-		//
-		// A window is the program here — UiWindow does not return — so a process that
-		// outlived its window would be one nobody can see, reach, or thought to stop,
-		// keeping a port bound and a syslink node answering.
-		//
-		// The wait is what tells a closed window from a reloaded one. A program whose
-		// window never opened is untouched: nothing ever connected, so nothing left.
+		// The last window closing ends the program: nobody could see or stop what
+		// outlived it. The wait is what tells a closed window from a reloaded one.
 		`
 		func (w *uiWindow) linger() \{
 			// Where a host owns the window, it is the one that ends the program, and
@@ -9637,9 +9875,20 @@ func uiSource(): Str {
 			}
 			time.Sleep(1500 * time.Millisecond)
 			w.mu.Lock()
-			gone := len(w.watchers) == 0
-			w.mu.Unlock()
+			gone := len(w.watchers) == 0 && !w.shut
 			if gone \{
+				w.shut = true
+			}
+			addr, listener := w.addr, w.listener
+			w.mu.Unlock()
+			if !gone \{
+				return
+			}
+			SyslinkKill(addr)
+			if listener != nil \{
+				listener.Close()
+			}
+			if Release() == 0 \{
 				fmt.Println("hive: the window was closed")
 				os.Exit(0)
 			}
@@ -9711,74 +9960,63 @@ func uiSource(): Str {
 			return nil, false
 		}
 		`,
+		// Called directly, as a test does, the handler is `update` and nothing more.
+		`
+		func UiWindow[S any, M any](title string, view func(S) UiView, update func(*S, M) M) func(*S, M) M \{
+			handler := func(state *S, msg M) M \{ return update(state, msg) }
+			startsAs(funcKey(handler), uiStarter[S, M](title, view))
+			return handler
+		}
+
+		func UiWindowAddressed[S any, M any](title string, view func(S) UiView, update func(*S, M, SyslinkAddress) M) func(*S, M, SyslinkAddress) M \{
+			handler := func(state *S, msg M, self SyslinkAddress) M \{ return update(state, msg, self) }
+			startsAs(funcKey(handler), uiStarter[S, M](title, view))
+			return handler
+		}
+		`,
 		// Rendering happens inside the turn, so a page never shows a mix of two states.
 		`
-		func UiWindow[S any, M any](
-			title string,
-			view func(S) UiView,
-			update func(*S, M) M,
-			initial S,
-			decode func([]byte) (any, error),
-			digest uint32,
-			encode func(M) []byte,
-			clone func(M) M,
-		) \{
-			turn := func(state *S, msg M, _ syslinkTurn) M \{ return update(state, msg) }
-			uiOpenWindow(title, view, turn, initial, decode, digest, encode, clone)
-		}
-
-		func UiWindowAddressed[S any, M any](
-			title string,
-			view func(S) UiView,
-			update func(*S, M, SyslinkAddress) M,
-			initial S,
-			decode func([]byte) (any, error),
-			digest uint32,
-			encode func(M) []byte,
-			clone func(M) M,
-		) \{
-			turn := func(state *S, msg M, t syslinkTurn) M \{ return update(state, msg, t.address()) }
-			uiOpenWindow(title, view, turn, initial, decode, digest, encode, clone)
-		}
-
-		func uiOpenWindow[S any, M any](
-			title string,
-			view func(S) UiView,
-			update func(*S, M, syslinkTurn) M,
-			initial S,
-			decode func([]byte) (any, error),
-			digest uint32,
-			encode func(M) []byte,
-			clone func(M) M,
-		) \{
-			w := &uiWindow\{
-				watchers: map[NetWsConnection]uint32\{},
-				holding:  map[NetWsConnection]uint32\{},
-				token:    CryptoRandomHex(16),
-			}
-			tally := uiFoldTally()
-			folded := func(state *S, msg M, t syslinkTurn) M \{
-				began := time.Now()
-				out := update(state, msg, t)
-				w.mu.Lock()
-				paced := w.paced
-				w.mu.Unlock()
-				if paced && !t.drawn \{
-					tally.fold(began, time.Time\{}, time.Time\{})
+		func uiStarter[S any, M any](title string, view func(S) UiView) syslinkStarter \{
+			return func(given any, first any) (any, func(SyslinkAddress)) \{
+				update := given.(func(*S, M, syslinkTurn) M)
+				w := &uiWindow\{
+					watchers: map[NetWsConnection]uint32\{},
+					holding:  map[NetWsConnection]uint32\{},
+					token:    CryptoRandomHex(16),
+				}
+				tally := uiFoldTally()
+				folded := func(state *S, msg M, t syslinkTurn) M \{
+					began := time.Now()
+					out := update(state, msg, t)
+					w.mu.Lock()
+					paced := w.paced
+					w.mu.Unlock()
+					if paced && !t.drawn \{
+						tally.fold(began, time.Time\{}, time.Time\{})
+						return out
+					}
+					viewed := time.Now()
+					v := view(*state)
+					drawn := time.Now()
+					w.publish(v)
+					tally.fold(began, viewed, drawn)
 					return out
 				}
-				viewed := time.Now()
-				v := view(*state)
-				drawn := time.Now()
-				w.publish(v)
-				tally.fold(began, viewed, drawn)
-				return out
-			}
 		`,
 		// Before the service starts, whose turns write the storage `initial` shares.
 		`
-			w.publish(view(initial))
-			addr := spawnService(folded, initial, decode, digest, encode, clone)
+				w.publish(view(first.(S)))
+				return folded, func(addr SyslinkAddress) \{ uiShow(w, title, addr) }
+			}
+		}
+		`,
+		// Events go to, and closing kills, the window's own mailbox rather than its name.
+		`
+		func uiShow(w *uiWindow, title string, named SyslinkAddress) \{
+			addr := SyslinkAddress\{Name: atomNone, Id: named.Id, box: named.box}
+			w.mu.Lock()
+			w.addr = addr
+			w.mu.Unlock()
 
 			page := strings.NewReplacer(
 				"__TITLE__", uiEscape(title),
@@ -9795,6 +10033,7 @@ func uiSource(): Str {
 				fmt.Println("hive: the window could not be opened — no port could be bound")
 				return
 			}
+			Hold()
 			url := "http://127.0.0.1:" + strconv.Itoa(bound) + "/?token=" + w.token
 			if err := uiOpen(url); err != nil \{
 		`,
@@ -9803,7 +10042,6 @@ func uiSource(): Str {
 		`
 				fmt.Println("hive: open " + url)
 			}
-			select \{}
 		}
 		`,
 		// HIVE_FOLDS prints fold timings once a second.
@@ -9874,6 +10112,90 @@ func uiSource(): Str {
 		var uiExtraScript string
 		var uiExtraRoutes = map[string]func(http.ResponseWriter, *http.Request)\{}
 		`,
+		// Everything under the program's own assets/ directory, embedded at compile
+		// time. Nil in a program that has no such directory; hive/assets.go fills it in.
+		//
+		// Not loaded at run time: the bytes are in the executable. A built Hive program
+		// is one file, and this only changes how big that file is.
+		`
+		var uiAssets *embed.FS
+
+		func uiAssetsAre(files embed.FS) \{ uiAssets = &files }
+		`,
+		// One embedded file, named by its path under assets/. A miss is a 404 rather
+		// than an error the program hears about: a sound whose recording is not there
+		// falls back to the synthesised voice.
+		//
+		// .. cannot climb out of an embed.FS — it is not a filesystem — but a path
+		// that tries is a path this never meant to answer, and saying so is cheaper
+		// than reasoning about what ReadFile would do with it.
+		`
+		func uiStored(rw http.ResponseWriter, req *http.Request) \{
+			if uiAssets == nil \{
+				http.Error(rw, "not found", http.StatusNotFound)
+				return
+			}
+			name := strings.TrimPrefix(req.URL.Path, "/_hive/asset/")
+			if name == "" || strings.Contains(name, "..") \{
+				http.Error(rw, "not found", http.StatusNotFound)
+				return
+			}
+			body, err := uiAssets.ReadFile("assets/" + name)
+			if err != nil \{
+				http.Error(rw, "not found", http.StatusNotFound)
+				return
+			}
+			rw.Header().Set("Content-Type", uiMime(name))
+		`,
+		// The bytes are in the executable, so they cannot change under a page that
+		// kept them.
+		`
+			rw.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			rw.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			_, _ = rw.Write(body)
+		}
+		`,
+		// What an embedded file is, by the end of its name. Short deliberately: this is
+		// what a browser needs to decode a sound or draw a picture, and a full table of
+		// media types would be a table nobody in this program reads.
+		`
+		func uiMime(name string) string \{
+			cut := strings.LastIndex(name, ".")
+			if cut < 0 \{
+				return "application/octet-stream"
+			}
+			switch strings.ToLower(name[cut:]) \{
+			case ".ogg", ".opus":
+				return "audio/ogg"
+			case ".mp3":
+				return "audio/mpeg"
+			case ".wav":
+				return "audio/wav"
+			case ".m4a", ".aac":
+				return "audio/mp4"
+			case ".flac":
+				return "audio/flac"
+			case ".png":
+				return "image/png"
+			case ".jpg", ".jpeg":
+				return "image/jpeg"
+			case ".webp":
+				return "image/webp"
+			case ".gif":
+				return "image/gif"
+			case ".svg":
+				return "image/svg+xml"
+			case ".woff2":
+				return "font/woff2"
+			}
+			return "application/octet-stream"
+		}
+		`,
+		// A subtree rather than a route each: what is under assets/ is the program's
+		// business, and a window serves it whether or not it draws a scene.
+		`
+		func init() \{ uiExtraRoutes["/_hive/asset/"] = uiStored }
+		`,
 		// The window's own little server. It is deliberately not HttpServe: this needs
 		// the port it actually bound, a socket upgrade on one route, and nothing else.
 		//
@@ -9934,6 +10256,9 @@ func uiSource(): Str {
 				ready <- 0
 				return
 			}
+			w.mu.Lock()
+			w.listener = listener
+			w.mu.Unlock()
 			ready <- bound
 			_ = http.Serve(listener, mux)
 		}
@@ -10282,7 +10607,6 @@ func uiSceneSource(): Str {
 		import (
 			"embed"
 			"net/http"
-			"strconv"
 			"strings"
 		)
 		`,
@@ -10304,95 +10628,10 @@ func uiSceneSource(): Str {
 			uiExtraRoutes["/_hive/three.module.min.js"] = uiSceneAsset("three.module.min.js")
 			uiExtraRoutes["/_hive/three.core.min.js"] = uiSceneAsset("three.core.min.js")
 		`,
-		// A subtree rather than a route each: what is under assets/ is the
-		// program's business, and this is registered before anything is known
-		// about what was embedded.
-		//
-		// ---------------------------------------------------------------------------
-		// What the program brought with it
-		// ---------------------------------------------------------------------------
 		`
-			uiExtraRoutes["/_hive/asset/"] = uiSceneStored
 		}
 		`,
-		// Everything under the program's own assets/ directory, embedded at compile
-		// time. Nil in a program that has no such directory; hive/assets.go fills it in.
-		//
-		// The one thing in a scene not made out of arithmetic, and still not loaded:
-		// the bytes are in the executable exactly as three.js is. A built Hive program
-		// is one file, and this only changes how big that file is.
 		`
-		var uiSceneAssets *embed.FS
-
-		func uiSceneAssetsAre(files embed.FS) \{ uiSceneAssets = &files }
-		`,
-		// One embedded file, named by its path under assets/. A miss is a 404 rather
-		// than an error the program hears about: a sound whose recording is not there
-		// falls back to the synthesised voice.
-		//
-		// .. cannot climb out of an embed.FS — it is not a filesystem — but a path
-		// that tries is a path this never meant to answer, and saying so is cheaper
-		// than reasoning about what ReadFile would do with it.
-		`
-		func uiSceneStored(rw http.ResponseWriter, req *http.Request) \{
-			if uiSceneAssets == nil \{
-				http.Error(rw, "not found", http.StatusNotFound)
-				return
-			}
-			name := strings.TrimPrefix(req.URL.Path, "/_hive/asset/")
-			if name == "" || strings.Contains(name, "..") \{
-				http.Error(rw, "not found", http.StatusNotFound)
-				return
-			}
-			body, err := uiSceneAssets.ReadFile("assets/" + name)
-			if err != nil \{
-				http.Error(rw, "not found", http.StatusNotFound)
-				return
-			}
-			rw.Header().Set("Content-Type", uiSceneMime(name))
-		`,
-		// The bytes are in the executable, so they cannot change under a page that
-		// kept them.
-		`
-			rw.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-			rw.Header().Set("Content-Length", strconv.Itoa(len(body)))
-			_, _ = rw.Write(body)
-		}
-		`,
-		// What an embedded file is, by the end of its name. Short deliberately: this is
-		// what a browser needs to decode a sound or draw a picture, and a full table of
-		// media types would be a table nobody in this program reads.
-		`
-		func uiSceneMime(name string) string \{
-			cut := strings.LastIndex(name, ".")
-			if cut < 0 \{
-				return "application/octet-stream"
-			}
-			switch strings.ToLower(name[cut:]) \{
-			case ".ogg", ".opus":
-				return "audio/ogg"
-			case ".mp3":
-				return "audio/mpeg"
-			case ".wav":
-				return "audio/wav"
-			case ".m4a", ".aac":
-				return "audio/mp4"
-			case ".flac":
-				return "audio/flac"
-			case ".png":
-				return "image/png"
-			case ".jpg", ".jpeg":
-				return "image/jpeg"
-			case ".webp":
-				return "image/webp"
-			case ".gif":
-				return "image/gif"
-			case ".svg":
-				return "image/svg+xml"
-			}
-			return "application/octet-stream"
-		}
-
 		func uiSceneText(mime string, body string) func(http.ResponseWriter, *http.Request) \{
 			return func(rw http.ResponseWriter, _ *http.Request) \{
 				rw.Header().Set("Content-Type", mime+"; charset=utf-8")

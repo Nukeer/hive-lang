@@ -317,6 +317,7 @@ func goType(ty: types.Ty): Str {
 	else if ty is types.Ty.TLib(module, name) {
 		return "hive." + text.capitalise(module) + name
 	}
+	else if ty is types.Ty.TAddress { return "hive.SyslinkAddress" }
 	else if ty is types.Ty.TFn(_, params, mutexes, result) {
 		mut Str[dyn] out = []
 		mut i := 0
@@ -381,6 +382,9 @@ proc emitTypeDecl(em: mut Emit, name: Str, fields: ast.Field[], variants: ast.Va
 	marker := "is" + goIdent(name)
 	open(em, "type " + goIdent(name) + " interface \{")
 	line(em, marker + "()")
+	for each f in fields {
+		line(em, sharedGetter(f.name) + "() " + goType(types.resolve(em.table, f.declared)))
+	}
 	close(em, "}")
 	for each v in variants {
 		blank(em)
@@ -394,7 +398,21 @@ proc emitTypeDecl(em: mut Emit, name: Str, fields: ast.Field[], variants: ast.Va
 		}
 		close(em, "}")
 		line(em, "func (" + goVariant(name, v.name) + ") " + marker + "() \{}")
+		for each f in fields {
+			line(em, "func (v " + goVariant(name, v.name) + ") " + sharedGetter(f.name) + "() " + goType(types.resolve(em.table, f.declared)) + " \{ return v." + goField(f.name) + " }")
+		}
 	}
+	// A union sorts by variant first, in the order they are declared.
+	mut Str[dyn] order = []
+	for each v in variants {
+		append(order, quoted(goVariant(name, v.name)))
+	}
+	line(em, "func init() \{ hive.RegisterVariants([]string\{" + join(order, ", ") + "}) }")
+}
+
+// Reads a shared field through the union's interface, which has no fields of its own.
+func sharedGetter(field: Str): Str {
+	return "shared" + goField(field)
 }
 
 // Everything the emitter tracks about names — mut, pointer, alias, in flight —
@@ -440,6 +458,8 @@ proc emitCallable(em: mut Emit, env: infer.Env, name: Str, params: ast.Param[], 
 		// it yet, so only where the line sits is worth remembering.
 		em.atomLine = len(em.out)
 		line(em, "hive.InitAtoms(" + atomTable(em) + ")")
+		// Returning from the body waits for open windows; a panic skips the wait.
+		open(em, "func() \{")
 	}
 	emitStmts(em, inner, body, resultType)
 	// Unreachable — Hive proved every path returns; the Go compiler cannot see
@@ -447,6 +467,10 @@ proc emitCallable(em: mut Emit, env: infer.Env, name: Str, params: ast.Param[], 
 	if resultType is types.Ty.TVoid {
 	} else {
 		line(em, "panic(\"hive: unreachable\")")
+	}
+	if isMain {
+		close(em, "}()")
+		line(em, "hive.MainReturned()")
 	}
 	close(em, "}")
 	append(em.spans, name + "\t{firstLine}\t{len(em.out)}")
@@ -610,21 +634,33 @@ proc emitStmt(em: mut Emit, env: infer.Env, s: ast.Stmt, result: types.Ty): infe
 		// read, and only if the call has not finished — which is why the name is
 		// bound to the work rather than to a value.
 		if deferred {
+			// `_` starts the work like any binding and keeps nothing to wait for.
+			mut held := name
+			if name == "_" {
+				held = fresh(em, "discard")
+			}
 			// A named send goes out now: the wait moves to the name, not the
 			// sending, so only the answer waits for where the name is read.
 			if isSend(env, value) {
-				pending := "_pending_" + goIdent(name)
+				pending := "_pending_" + goIdent(held)
 				if value is ast.Expr.Call(address, sent) {
 					line(em, pending + " := " + pendingSend(em, env, address, sent))
 				}
-				line(em, taskName(name) + " := hive.Spawn(func() any \{ return hive.SyslinkAwait(" + pending + ", 0) })")
-				append(em.deferred, name)
-				return infer.bound(env, name, ty)
+				line(em, taskName(held) + " := hive.Spawn(func() any \{ return hive.SyslinkAwait(" + pending + ", 0) })")
+			} else {
+				work := onThread(em, env, value, ty)
+				line(em, taskName(held) + " := hive.Spawn(func() any \{ return " + work + " })")
 			}
-			work := onThread(em, env, value, ty)
-			line(em, taskName(name) + " := hive.Spawn(func() any \{ return " + work + " })")
+			line(em, "_ = " + taskName(held))
+			if name == "_" {
+				return env
+			}
 			append(em.deferred, name)
 			return infer.bound(env, name, ty)
+		}
+		if name == "_" {
+			line(em, "_ = " + expr(em, env, value, ty))
+			return env
 		}
 		// Written with the type rather than `:=`: the two do not always agree.
 		// `s := Shape.Circle(9)` binds a `Shape` in Hive but the variant's own
@@ -648,6 +684,10 @@ proc emitStmt(em: mut Emit, env: infer.Env, s: ast.Stmt, result: types.Ty): infe
 		return infer.bound(env, name, ty)
 	} else if s is ast.Stmt.TypedDecl(declared, name, value, mutable, _) {
 		ty := types.resolve(env.table, declared)
+		if name == "_" {
+			line(em, "var _ " + goType(ty) + " = " + expr(em, env, value, ty))
+			return env
+		}
 		written := bindingValue(em, env, name, value, ty, mutable)
 		if mutable {
 			append(em.mutables, name)
@@ -681,7 +721,7 @@ proc emitStmt(em: mut Emit, env: infer.Env, s: ast.Stmt, result: types.Ty): infe
 		if em.inTest {
 			emitTestAssert(em, env, condition)
 		} else {
-			line(em, "hive.Assert(" + expr(em, env, condition, types.Ty.TBool()) + ")")
+			emitAssert(em, env, condition)
 		}
 		return env
 	} else if s is ast.Stmt.PanicStmt(value) {
@@ -1267,7 +1307,12 @@ proc expr(em: mut Emit, env: infer.Env, e: ast.Expr, want: types.Ty): Str {
 	else if e is ast.Expr.Hole { return "_" }
 	else if e is ast.Expr.Absent { return "" }
 	else if e is ast.Expr.Negate(operand) {
-		return "-(" + expr(em, env, operand, infer.typeOf(env, operand)) + ")"
+		operandType := infer.typeOf(env, operand)
+		// `-MIN` has no Int to be, so it stays at the edge: `MAX`.
+		if operandType is types.Ty.TInt && numberLiteral(operand) == false {
+			return "hive.NegInt(" + expr(em, env, operand, operandType) + ")"
+		}
+		return "-(" + expr(em, env, operand, operandType) + ")"
 	}
 	// Parenthesised for the reason `-` is: what Hive bound tightly, Go has to be
 	// told to bind tightly too.
@@ -1669,6 +1714,10 @@ proc running(em: mut Emit, env: infer.Env, args: ast.Arg[]): Str {
 		if rows is types.Ty.TVoid {
 			return "hive.SqlExec(" + connection + ", " + fragment + ")"
 		}
+		// A header row of column names, then every row as text.
+		if types.isTable(rows) {
+			return "hive.SqlTable(" + connection + ", " + fragment + ")"
+		}
 		return "hive.SqlRows(" + connection + ", " + fragment + ", " + rowMapper(em, rows) + ")"
 	}
 	fail(em, "`hive.sql.run` runs a `hive.sql.Fragment`, and this is " + types.show(held))
@@ -1864,8 +1913,13 @@ proc binary(em: mut Emit, env: infer.Env, op: ast.BinOp, left: ast.Expr, right: 
 	rightType := infer.typeOf(env, right)
 	// An atom coerces to `Str` beside one, as its decimal value rather than its
 	// name — so `"0" + #Nil` is `"00"` and not `"0Nil"`.
-	l := coerced(em, env, left, leftType, rightType)
+	mut l := coerced(em, env, left, leftType, rightType)
 	r := coerced(em, env, right, rightType, leftType)
+	// Go folds two Float constants at compile time and refuses a result that
+	// overflows, where Hive reaches infinity; a call makes it an ordinary value.
+	if leftType is types.Ty.TFloat && numberLiteral(left) && numberLiteral(right) && (op is ast.BinOp.Add || op is ast.BinOp.Sub || op is ast.BinOp.Mul) {
+		l = "hive.Unfolded(" + l + ")"
+	}
 
 	if op is ast.BinOp.And {
 		// `v bounds i` desugars into this shape, and two in one condition would
@@ -1886,6 +1940,13 @@ proc binary(em: mut Emit, env: infer.Env, op: ast.BinOp, left: ast.Expr, right: 
 	if op is ast.BinOp.Le { return "(" + l + " <= " + r + ")" }
 	if op is ast.BinOp.Ge { return "(" + l + " >= " + r + ")" }
 	return arithmetic(em, env, op, l, r, leftType)
+}
+
+func numberLiteral(e: ast.Expr): Bool {
+	if e is ast.Expr.IntLit(_) { return true }
+	if e is ast.Expr.FloatLit(_) { return true }
+	if e is ast.Expr.Negate(operand) { return numberLiteral(operand) }
+	return false
 }
 
 // The Go for `v bounds i`, or `""` when this `&&` is something else. It matches
@@ -1971,6 +2032,12 @@ proc coerced(em: mut Emit, env: infer.Env, side: ast.Expr, ty: types.Ty, other: 
 // `+` is three operators told apart by one type: a sum, a concatenation, and a
 // fresh vector holding both sides.
 proc arithmetic(em: mut Emit, env: infer.Env, op: ast.BinOp, l: Str, r: Str, ty: types.Ty): Str {
+	// An Int that would pass either edge stays at it rather than wrapping.
+	if ty is types.Ty.TInt {
+		if op is ast.BinOp.Add { return "hive.AddInt(" + l + ", " + r + ")" }
+		if op is ast.BinOp.Sub { return "hive.SubInt(" + l + ", " + r + ")" }
+		if op is ast.BinOp.Mul { return "hive.MulInt(" + l + ", " + r + ")" }
+	}
 	if op is ast.BinOp.Add {
 		if ty is types.Ty.TVec(_, _) {
 			return "hive.Concat(" + l + ", " + r + ")"
@@ -2032,7 +2099,11 @@ func isUnion(t: types.Table, ty: types.Ty): Bool {
 proc member(em: mut Emit, env: infer.Env, subject: ast.Expr, field: Str): Str {
 	// `hive.<module>` on its own is not a value; only a call ever reaches
 	// through it.
-	return expr(em, env, subject, types.Ty.TUnknown()) + "." + goField(field)
+	on := expr(em, env, subject, types.Ty.TUnknown())
+	if isUnion(env.table, infer.typeOf(env, subject)) {
+		return on + "." + sharedGetter(field) + "()"
+	}
+	return on + "." + goField(field)
 }
 
 proc call(em: mut Emit, env: infer.Env, callee: ast.Expr, args: ast.Arg[], want: types.Ty): Str {
@@ -2059,6 +2130,19 @@ proc namedCall(em: mut Emit, env: infer.Env, name: Str, args: ast.Arg[], want: t
 	// same call through.
 	target := infer.callTarget(env, name)
 	if target is infer.CallTarget.Declared(info) {
+		names := paramNames(info.params)
+		answer := types.resolve(env.table, info.result)
+		if em.ferrying == false && (answer is types.Ty.TVoid || concrete(answer)) && writtenOutOfOrder(args, names) {
+			mut types.Ty[dyn] tys = []
+			mut Bool[dyn] mutexes = []
+			for each p in info.params {
+				append(tys, types.resolve(env.table, p.declared))
+				append(mutexes, p.mutex)
+			}
+			h := hoist(em, env, args, names, tys, mutexes, lends(em, name))
+			inner := goIdent(name) + "(" + orderedArgs(em, h.env, info, h.args) + ")"
+			return inWrittenOrder(h, goResult(answer), inner)
+		}
 		return goIdent(name) + "(" + orderedArgs(em, env, info, args) + ")"
 	}
 	if target is infer.CallTarget.Struct(fields) {
@@ -2173,7 +2257,7 @@ proc memberCall(em: mut Emit, env: infer.Env, subject: ast.Expr, field: Str, arg
 			}
 		}
 	}
-	return expr(em, env, subject, types.Ty.TUnknown()) + "." + goField(field) + "("
+	return member(em, env, subject, field) + "("
 		+ valueArgs(em, env, infer.typeOf(env, ast.Expr.Member(subject, field)), args) + ")"
 }
 
@@ -2259,11 +2343,175 @@ proc resultConstructor(em: mut Emit, env: infer.Env, variant: Str, args: ast.Arg
 }
 
 proc structLiteral(em: mut Emit, env: infer.Env, name: Str, fields: ast.Field[], args: ast.Arg[]): Str {
-	return goIdent(name) + "\{" + fieldArgs(em, env, fields, args) + "}"
+	return literalOf(em, env, goIdent(name), fields, args)
 }
 
 proc variantLiteral(em: mut Emit, env: infer.Env, typeName: Str, variant: Str, fields: ast.Field[], args: ast.Arg[]): Str {
-	return goVariant(typeName, variant) + "\{" + fieldArgs(em, env, fields, args) + "}"
+	return literalOf(em, env, goVariant(typeName, variant), fields, args)
+}
+
+proc literalOf(em: mut Emit, env: infer.Env, goName: Str, fields: ast.Field[], args: ast.Arg[]): Str {
+	names := fieldNames(fields)
+	if writtenOutOfOrder(args, names) {
+		mut types.Ty[dyn] tys = []
+		for each f in fields {
+			append(tys, types.resolve(env.table, f.declared))
+		}
+		h := hoist(em, env, args, names, tys, [], true)
+		return inWrittenOrder(h, goName, goName + "\{" + fieldArgs(em, h.env, fields, h.args) + "}")
+	}
+	return goName + "\{" + fieldArgs(em, env, fields, args) + "}"
+}
+
+// --- Written order -------------------------------------------------------------
+//
+// Go evaluates arguments in parameter order, and a named one may be written
+// anywhere, so a call written out of order evaluates its arguments first, as
+// parameters of a function literal called on the spot.
+
+type Hoisted {
+	params: Str[dyn]
+	values: Str[dyn]
+	args: ast.Arg[dyn]
+	env: infer.Env
+}
+
+// The parameter each argument fills, in the order the arguments were written;
+// -1 for one that fills none.
+func slotsOf(args: ast.Arg[], names: Str[]): Int[dyn] {
+	mut Int[dyn] open = []
+	mut i := 0
+	for each n in names {
+		if ast.claimedByName(args, n) == false {
+			append(open, i)
+		}
+		i = i + 1
+	}
+	mut Int[dyn] out = []
+	mut seen := 0
+	for each a in args {
+		if a.name != "" {
+			if indexOf(names, a.name) is Result.Ok(at) {
+				append(out, at)
+			} else {
+				append(out, -1)
+			}
+		} else {
+			if open bounds seen {
+				append(out, open[seen])
+			} else {
+				append(out, -1)
+			}
+			seen = seen + 1
+		}
+	}
+	return out
+}
+
+// Whether two arguments run in a different order than written, and one of them
+// could notice.
+func writtenOutOfOrder(args: ast.Arg[], names: Str[]): Bool {
+	mut previous := -1
+	mut reordered := false
+	for each slot in slotsOf(args, names) {
+		if slot < previous {
+			reordered = true
+		}
+		previous = slot
+	}
+	if reordered == false {
+		return false
+	}
+	for each a in args {
+		if settled(a.value) == false && pathOf(a.value) == "" {
+			return true
+		}
+	}
+	return false
+}
+
+proc hoist(em: mut Emit, env: infer.Env, args: ast.Arg[], names: Str[], tys: types.Ty[], mutexes: Bool[], lent: Bool): Hoisted {
+	slots := slotsOf(args, names)
+	mut Str[dyn] params = []
+	mut Str[dyn] values = []
+	mut ast.Arg[dyn] inner = []
+	mut scope := env
+	mut k := 0
+	for each a in args {
+		mut slot := -1
+		if slots bounds k {
+			slot = slots[k]
+		}
+		k = k + 1
+		mut ty := types.Ty.TUnknown()
+		if tys bounds slot {
+			ty = tys[slot]
+		}
+		// A mutex argument is an address, which nothing can move.
+		if types.mutexAt(mutexes, slot) || settled(a.value) || concrete(ty) == false {
+			append(inner, a)
+			continue
+		}
+		name := fresh(em, "w")
+		mut written := expr(em, env, a.value, ty)
+		if lent == false && isMutableSource(em, a.value) && types.ownsStorage(env.table, ty) {
+			written = cloned(env.table, ty, written)
+		}
+		append(params, name + " " + goType(ty))
+		append(values, written)
+		append(inner, ast.Arg(a.name, ast.Expr.Ident(name)))
+		scope = infer.bound(scope, name, ty)
+	}
+	return Hoisted(params, values, inner, scope)
+}
+
+// `result` is the Go type the call answers with, or "" for none.
+func inWrittenOrder(h: Hoisted, result: Str, inner: Str): Str {
+	if result == "" {
+		return "func(" + join(h.params, ", ") + ") \{ " + inner + " }(" + join(h.values, ", ") + ")"
+	}
+	return "func(" + join(h.params, ", ") + ") " + result + " \{ return " + inner + " }(" + join(h.values, ", ") + ")"
+}
+
+func goResult(ty: types.Ty): Str {
+	if ty is types.Ty.TVoid {
+		return ""
+	}
+	return goType(ty)
+}
+
+// Whether a type can be spelled in Go as it stands.
+func concrete(ty: types.Ty): Bool {
+	if ty is types.Ty.TUnknown { return false }
+	if ty is types.Ty.TVar(_) { return false }
+	if ty is types.Ty.TVec(element, _) { return concrete(element) }
+	if ty is types.Ty.TResult(ok, bad) { return concrete(ok) && concrete(bad) }
+	if ty is types.Ty.TMap(key, value) { return concrete(key) && concrete(value) }
+	if ty is types.Ty.TFn(_, params, _, result) {
+		for each p in params {
+			if concrete(p) == false {
+				return false
+			}
+		}
+		return concrete(result)
+	}
+	return true
+}
+
+func paramNames(params: ast.Param[]): Str[dyn] {
+	mut Str[dyn] out = []
+	for each p in params {
+		append(out, p.name)
+	}
+	return out
+}
+
+func fieldNames(fields: ast.Field[]): Str[dyn] {
+	mut Str[dyn] out = []
+	for each f in fields {
+		append(out, f.name)
+	}
+	return out
 }
 
 // Named arguments may appear anywhere; only the unnamed ones need to be in
@@ -2422,6 +2670,10 @@ proc partial(em: mut Emit, env: infer.Env, callee: ast.Expr, args: ast.Arg[], wa
 	mutablesWere := em.mutables
 	mut Str[dyn] params = []
 	mut ast.Arg[dyn] filled = []
+	// What is supplied is worked out now, not at each call.
+	mut Str[dyn] captures = []
+	mut Str[dyn] captured = []
+	mut scope := env
 	for each a in args {
 		if a.value is ast.Expr.Hole {
 			holeName := fresh(em, "h")
@@ -2439,18 +2691,33 @@ proc partial(em: mut Emit, env: infer.Env, callee: ast.Expr, args: ast.Arg[], wa
 				append(params, holeName + " " + goType(holeType))
 			}
 			append(filled, ast.Arg(a.name, ast.Expr.Ident(holeName)))
+		} else if settled(a.value) == false && concrete(whole) && concrete(infer.typeOf(env, a.value)) {
+			supplied := infer.typeOf(env, a.value)
+			name := fresh(em, "c")
+			mut written := expr(em, env, a.value, supplied)
+			if isMutableSource(em, a.value) && types.ownsStorage(env.table, supplied) {
+				written = cloned(env.table, supplied, written)
+			}
+			append(captures, name + " " + goType(supplied))
+			append(captured, written)
+			append(filled, ast.Arg(a.name, ast.Expr.Ident(name)))
+			scope = infer.bound(scope, name, supplied)
 		} else {
 			append(filled, a)
 		}
 	}
 
-	body := call(em, env, callee, filled, resultType)
+	body := call(em, scope, callee, filled, resultType)
 	em.pointers = pointersWere
 	em.mutables = mutablesWere
+	mut closure := "func(" + join(params, ", ") + ") " + goType(resultType) + " \{ return " + body + " }"
 	if resultType is types.Ty.TVoid {
-		return "func(" + join(params, ", ") + ") \{ " + body + " }"
+		closure = "func(" + join(params, ", ") + ") \{ " + body + " }"
 	}
-	return "func(" + join(params, ", ") + ") " + goType(resultType) + " \{ return " + body + " }"
+	if len(captures) == 0 {
+		return closure
+	}
+	return "func(" + join(captures, ", ") + ") " + goType(whole) + " \{ return " + closure + " }(" + join(captured, ", ") + ")"
 }
 
 func copiedArgs(args: ast.Arg[]): ast.Arg[dyn] {
@@ -2464,6 +2731,9 @@ func copiedArgs(args: ast.Arg[]): ast.Arg[dyn] {
 // --- The global builtins -----------------------------------------------------
 
 proc builtin(em: mut Emit, env: infer.Env, name: Str, args: ast.Arg[], want: types.Ty): Str {
+	if name == "spawn" || name == "at" || name == "kill" {
+		return serviceBuiltin(em, env, name, args)
+	}
 	mut first := argExpr(args, 0)
 	firstType := infer.typeOf(env, first)
 	a := expr(em, env, first, types.Ty.TUnknown())
@@ -2792,11 +3062,7 @@ func lastOf(pieces: Str[]): Str {
 // so the decoder for a reply is the one its mailbox already uses.
 
 func isAddress(env: infer.Env, e: ast.Expr): Bool {
-	ty := infer.typeOf(env, e)
-	if ty is types.Ty.TLib(module, name) {
-		return module == "syslink" && name == "Address"
-	}
-	return false
+	return infer.typeOf(env, e) is types.Ty.TAddress
 }
 
 // Whether this expression is a call *of an address*, which is a send rather
@@ -2909,6 +3175,7 @@ proc signatureOf(em: mut Emit, ty: types.Ty, seen: Str[]): Str {
 	if ty is types.Ty.TAtom { return "Atom" }
 	if ty is types.Ty.TVoid { return "void" }
 	if ty is types.Ty.TLib(module, name) { return "hive.{module}.{name}" }
+	if ty is types.Ty.TAddress { return "Address" }
 	if ty is types.Ty.TVec(element, dim) {
 		return signatureOf(em, element, seen) + types.showDim(dim)
 	}
@@ -2940,6 +3207,36 @@ proc signatureOf(em: mut Emit, ty: types.Ty, seen: Str[]): Str {
 		return name
 	}
 	return "?"
+}
+
+proc serviceBuiltin(em: mut Emit, env: infer.Env, name: Str, args: ast.Arg[]): Str {
+	useModule(em, "syslink")
+	if name == "spawn" {
+		handler := argExpr(args, 0)
+		mut registered := "hive.SyslinkUnnamed"
+		if len(args) == 3 {
+			registered = expr(em, env, argExpr(args, 2), types.Ty.TAtom())
+		}
+		return "hive." + addressedName("SyslinkSpawn", env, handler) + "(" + expr(em, env, handler, types.Ty.TUnknown()) + ", "
+			+ registered + ", " + serviceTail(em, env, handler, argExpr(args, 1)) + ")"
+	}
+	if name == "at" {
+		if len(args) == 2 {
+			return "hive.SyslinkOn(" + expr(em, env, argExpr(args, 0), types.Ty.TStr()) + ", "
+				+ expr(em, env, argExpr(args, 1), types.Ty.TAtom()) + ")"
+		}
+		return "hive.SyslinkAt(" + expr(em, env, argExpr(args, 0), types.Ty.TAtom()) + ")"
+	}
+	return "hive.SyslinkKill(" + expr(em, env, argExpr(args, 0), types.Ty.TAddress()) + ")"
+}
+
+func addressedName(base: Str, env: infer.Env, handler: ast.Expr): Str {
+	if infer.typeOf(env, handler) is types.Ty.TFn(_, params, _, _) {
+		if len(params) == 3 {
+			return base + "Addressed"
+		}
+	}
+	return base
 }
 
 // --- What a handler folds over -----------------------------------------------
@@ -4127,21 +4424,15 @@ proc libraryCall(em: mut Emit, env: infer.Env, module: Str, name: Str, args: ast
 		if stdlib.isUiEvent(name) {
 			return uiEvent(em, env, name, args)
 		}
-		if name == "window" || name == "windowAddressed" {
+		if name == "window" {
 			em.window = true
 			update := argExpr(args, 2)
-			return "hive.Ui" + text.capitalise(name) + "(" + expr(em, env, argExpr(args, 0), types.Ty.TStr()) + ", "
+			return "hive." + addressedName("UiWindow", env, update) + "(" + expr(em, env, argExpr(args, 0), types.Ty.TStr()) + ", "
 				+ expr(em, env, argExpr(args, 1), types.Ty.TUnknown()) + ", "
-				+ expr(em, env, update, types.Ty.TUnknown()) + ", "
-				+ serviceTail(em, env, update, argExpr(args, 3)) + ")"
+				+ expr(em, env, update, types.Ty.TUnknown()) + ")"
 		}
 	}
 	if module == "syslink" {
-		if name == "spawn" || name == "spawnAddressed" {
-			handler := argExpr(args, 0)
-			return "hive.Syslink" + text.capitalise(name) + "(" + expr(em, env, handler, types.Ty.TUnknown()) + ", "
-				+ serviceTail(em, env, handler, argExpr(args, 1)) + ")"
-		}
 		if name == "monitor" {
 			message := argExpr(args, 2)
 			ty := infer.typeOf(env, message)
@@ -4154,7 +4445,7 @@ proc libraryCall(em: mut Emit, env: infer.Env, module: Str, name: Str, args: ast
 	// built rather than a call: `hive.net.HttpResponse(200, [], "ok")` is a
 	// value, and the fields it lands in say what its arguments are.
 	if len(stdlib.fieldsOf(module, name)) > 0 {
-		return "hive." + text.capitalise(module) + name + "\{" + fieldArgs(em, env, stdlib.fieldsOf(module, name), args) + "}"
+		return literalOf(em, env, "hive." + text.capitalise(module) + name, stdlib.fieldsOf(module, name), args)
 	}
 	return "hive." + stdlib.goNameOf(module, name) + "(" + typedArgs(em, env, args, stdlib.paramsOf(module, name)) + ")"
 }
@@ -4278,6 +4569,26 @@ proc emitTestStmts(em: mut Emit, env: infer.Env, body: ast.Block): infer.Env {
 // A failed comparison shows both sides. Each is bound to a temporary first, so
 // the values reported are the ones the check computed and an operand with an
 // effect runs exactly once.
+// Outside a test a failed `assert` ends the program, saying what it asserted.
+proc emitAssert(em: mut Emit, env: infer.Env, condition: ast.Expr): void {
+	if condition is ast.Expr.Binary(op, left, right) {
+		if op is ast.BinOp.Eq || op is ast.BinOp.Neq {
+			leftType := infer.typeOf(env, left)
+			l := fresh(em, "l")
+			r := fresh(em, "r")
+			line(em, l + " := " + expr(em, env, left, leftType))
+			line(em, r + " := " + expr(em, env, right, leftType))
+			mut checked := equality(em, env, l, r, leftType)
+			if op is ast.BinOp.Neq {
+				checked = "!(" + checked + ")"
+			}
+			line(em, "hive.AssertCmp(" + checked + ", " + quoted(sourceOf(condition)) + ", hive.Show(" + l + "), hive.Show(" + r + "))")
+			return
+		}
+	}
+	line(em, "hive.Assert(" + expr(em, env, condition, types.Ty.TBool()) + ", " + quoted(sourceOf(condition)) + ")")
+}
+
 proc emitTestAssert(em: mut Emit, env: infer.Env, condition: ast.Expr): void {
 	if condition is ast.Expr.Binary(op, left, right) {
 		if op is ast.BinOp.Eq || op is ast.BinOp.Neq {
