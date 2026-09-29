@@ -3659,7 +3659,7 @@ proc emitJsonValueDecoder(em: mut Emit, name: Str): void {
 	close(em, "}")
 	line(em, "return " + goVariant(name, "Object") + "\{Properties: properties}, nil")
 	close(em, "}")
-	line(em, "return nil, &hive.JsonJsonError\{Path: path, Expected: " + quoted("a string, a boolean, a number, an array or an object") + ", Found: \"null\"}")
+	line(em, "return " + goVariant(name, "Null") + "\{}, nil")
 	close(em, "}")
 }
 

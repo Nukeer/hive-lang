@@ -691,14 +691,15 @@ test "the json module no longer flattens a document into a table" {
 test "a JsonValue is built, matched and read like any declared type" {
 	assert problemCount(inMain("mut hive.map.Map<Str, hive.json.JsonValue> fields = hive.map.new()  hive.map.set(fields, \"a\", hive.json.JsonValue.Int(1))  v := hive.json.JsonValue.Object(fields)  if v is hive.json.JsonValue.Object(props) \{ for each key in hive.map.keys(props) \{ echo key } }")) == 0
 	assert problemCount(inMain("echo hive.json.JsonValue.Object(hive.map.new())")) == 0
+	assert problemCount(inMain("v := hive.json.JsonValue.Null()  echo v is hive.json.JsonValue.Null")) == 0
 	assert problemCount("import hive.json\nfunc f(v: json.JsonValue): Bool \{ return v is json.JsonValue.Array(_) }\nproc main(): void \{ echo f(json.JsonValue.Boolean(true)) }") == 0
 	assert problemCount(inMain("if hive.json.JsonValue.decode(\"1\", hive.json.codec()) is Result.Ok(v) \{ echo encode(v, hive.json.codec()) }")) == 0
 	assert problemCount("type Doc \{ data: hive.json.JsonValue }\n" + inMain("if Doc.decode(\"x\", hive.json.codec()) is Result.Ok(d) \{ echo d.data }")) == 0
 }
 
 test "a JsonValue is named as it was written" {
-	assert opens(problem(inMain("echo hive.json.JsonValue.Null()")),
-		"in `main`: `hive.json.JsonValue` has no variant `Null`")
+	assert opens(problem(inMain("echo hive.json.JsonValue.Number(1)")),
+		"in `main`: `hive.json.JsonValue` has no variant `Number`")
 	assert opens(problem(inMain("echo hive.json.KV(\"a\", hive.json.JsonValue.Int(1))")),
 		"in `main`: `hive.json` has no `KV`")
 	assert opens(problem(inMain("hive.json.JsonValue v = hive.json.JsonValue.Int(1)  Int n = v")),

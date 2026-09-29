@@ -614,6 +614,7 @@ test "a JsonValue reads and writes the document as it is" {
 	assert has(got, "hive.JsonEncodeFraction(v.Value)")
 	assert has(got, "properties := hive.NewDict[string, hive_json_JsonValue]()")
 	assert has(got, "hive.JsonEncodeDict(v.Properties, jsonEncode_hive_json_JsonValue)")
+	assert has(got, "return hive_json_JsonValueNull\{}, nil")
 	// Never the tagged-union shape every other union takes.
 	assert has(got, "hive.JsonVariant(") == false
 }
