@@ -11,14 +11,14 @@ file, plus a generated `hive` runtime package.
 
 | Hive | Go |
 | --- | --- |
-| `proc` / `func` | an ordinary `func`; `proc main(): void` → `func main()` |
+| `proc` / `func` | an ordinary `func`; `proc main(): void` → `func main()`, its body a closure followed by `hive.MainReturned()`, which waits for any window still open |
 | `query q(p: Str): Row[dyn]` | a function returning SQL text with `?` plus the bound args |
-| `type T { }` / `type T { A {..} B }` | a `struct` / an `interface` + one struct per variant |
-| fields declared outside any variant | appended to **every** variant struct |
+| `type T { }` / `type T { A {..} B }` | a `struct` / an `interface` + one struct per variant, and an `init` that registers the variants' order for `sort` |
+| fields declared outside any variant | appended to **every** variant struct, each read through a getter on the interface: `e.at` → `e.sharedAt()` |
 | `Str` `Int` `Float` `Bool` `Atom` | `string` `int` `float64` `bool` `hive.Atom` |
 | `Str[3]`, `Str[dyn]`, `Str[]` | `[]string` — all three, which is why value semantics exist |
 | `test "..." { }` | a `t.Run(...)` in a generated `main_test.go`, run by `go test` |
-| `assert c` (ordinary code) | `hive.Assert(c)` — a panic |
+| `assert c` (ordinary code) | `hive.Assert(c, "c")` — a panic quoting `c`; a comparison goes through `hive.AssertCmp` with both sides |
 | `assert c` (inside a `test`) | a recorded failure quoting `c` and, for a comparison, both sides |
 | `mut` (on a declaration) | nothing at all: it is compile-time only |
 | `mut b = a` (both `mut`, owns storage) | no variable — `b` compiles to `a`, so one slice header is shared |
@@ -28,7 +28,8 @@ file, plus a generated `hive` runtime package.
 | `p(mutVec)` (waited for) | `p(&mutVec)` — the callee writes the caller's own storage |
 | `async p(mutVec)` (fired off) | `{ _a0 := hive.CloneVec(mutVec); go p(&_a0) }` |
 | `proc(mut T, U): R` (a function type) | `func(*T, U) R` — a call through one hands over the address exactly as `p(mutVec)` does |
-| `hive.syslink.spawn(h, s)` | `hive.SyslinkSpawn(h, ..)`: each turn calls `h(&state, msg)` and replies with what it returns — a deep copy for a caller on this node |
+| `spawn(h, s)` / `spawn(h, s, #N)` | `hive.SyslinkSpawn(h, name, s, ..)`: each turn calls `h(&state, msg)` and replies with what it returns — a deep copy for a caller on this node |
+| `hive.ui.window(t, v, u)` | `hive.UiWindow(t, v, u)`: a handler that is `u`, remembered as a window so that `spawn` opens one |
 | `f(x)` / `async f(x)` | a plain call / `go f(x)` |
 | `x := async f(a)` | `_task_x := hive.Spawn(..)`, and every read of `x` becomes `_task_x.Await()` |
 | `f(x) with timeout ms` | `hive.AwaitTimeout(hive.Spawn(..), ms)` → a `Result` |
@@ -46,9 +47,11 @@ file, plus a generated `hive` runtime package.
 | `#Atom` | a small integer constant + a generated atom table |
 | `a / b`, `a ** b`, `a % b` | `hive.DivInt`, `hive.PowInt`, `hive.ModInt` ([05](05-expressions.md#57-arithmetic-at-the-edges)) |
 | `echo v` / `panic v` | `fmt.Println(v)` / `panic(hive.Show(v))` |
-| `f` (bare reference) / `f(a, _, c)` | the function value / a closure whose parameter is the hole |
+| `f` (bare reference) / `f(a, _, c)` | the function value / a closure whose parameter is the hole, inside a function literal called on the spot with `a` and `c`, so they are captured as they were |
+| `f(b: g(), a: h())` (named, out of order) | a function literal called on the spot with `g()` and `h()` in written order, which calls `f` in parameter order |
+| `_ := e` / `_ := async f()` | `_ = e` / a `hive.Spawn` nobody waits for |
 | `func f(v: T[]): T` at `T = Str` | `func f_Str(v []string) string` — one copy per instantiation |
-| `hive.file.csv(p, s)` / `hive.sql.run(conn, q(..))` / `hive.sql.raw(conn, t)` | `hive.ReadCsv(..)` / `hive.SqlRows(..)` / `hive.SqlQuery(..)`, each → a `Result` |
+| `hive.file.csv(p, s)` / `hive.sql.run(conn, q(..))` / `hive.sql.raw(conn, t)` | `hive.ReadCsv(..)` / `hive.SqlRows(..)` — `hive.SqlTable(..)` for a query declared as a `Table` — / `hive.SqlQuery(..)`, each → a `Result` |
 | a `hive.*` library call | a call of the same name on the generated `hive` runtime package (`hive.time.now` → `hive.TimeNow`) |
 | `T.decode(t, c)` / `T.Variant.decode(t, c)` | `hive.JsonParse(t, jsonDecode_T)` / `hive.JsonParse(t, jsonDecode_T_Variant)` — `c` names the format and is not itself evaluated |
 | `encode(v, c)` | `jsonEncode_T(v)` for a declared `T`, else the encoder for the scalar or vector it is — written at the call site from the format `c` names, never a runtime call |
@@ -142,7 +145,7 @@ be assumed to have. A build for the machine it is running on is given no
 environment at all, and is therefore byte for byte the build it always was.
 
 **A windowed program is linked without a console.** Windows gives every
-executable one, so a program whose `main` opens a `hive.ui.window` would arrive
+executable one, so a program that opens a `hive.ui.window` would arrive
 beside a terminal nobody asked for. `hive build` passes `-H=windowsgui` for a
 Windows target when the program opens a window, and for no other program: a
 program that serves a page prints, and a print with no console goes nowhere.

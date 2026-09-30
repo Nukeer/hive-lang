@@ -1300,7 +1300,7 @@ proc changingExpr(t: types.Table, e: ast.Expr, out: mut Str[dyn]): void {
 					}
 				}
 			} else if growsIt(name) {
-				put(out, emit.rootOf(argExpr(args, 0)))
+				put(out, emit.rootOf(argExpr(infer.builtinArgs(name, args), 0)))
 			} else if infer.isBuiltin(name) == false && types.findType(t, name) is Result.Error(_) {
 				// A function value this walk cannot type: any argument may be a mutex.
 				for each a in args {
@@ -1315,7 +1315,7 @@ proc changingExpr(t: types.Table, e: ast.Expr, out: mut Str[dyn]): void {
 		found := libraryOf(callee)
 		if text.charAt(found, 0) == "map" {
 			if text.charAt(found, 1) == "set" || text.charAt(found, 1) == "delete" {
-				put(out, emit.rootOf(argExpr(args, 0)))
+				put(out, emit.rootOf(argExpr(ast.positional(args, ["m"]), 0)))
 			}
 		}
 		for each a in args {

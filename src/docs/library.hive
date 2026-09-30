@@ -49,9 +49,9 @@ func index(): Str {
 		changes what is linked.
 
 		Each module owns its types under its own namespace: ~BT~hive.net.HttpRequest~BT~,
-		~BT~hive.json.JsonError~BT~, ~BT~hive.map.Map~BT~, ~BT~hive.syslink.Address~BT~. The only
-		builtin types that live directly on ~BT~hive~BT~ are the two the language uses
-		without a module: ~BT~Result~BT~ and ~BT~Table~BT~.
+		~BT~hive.json.JsonError~BT~, ~BT~hive.map.Map~BT~, ~BT~hive.syslink.SyslinkError~BT~. The
+		only builtin types that live directly on ~BT~hive~BT~ are the three the language uses
+		without a module: ~BT~Result~BT~, ~BT~Table~BT~ and ~BT~Address~BT~.
 
 		**A library call is held to its signature** — how many arguments, and what each
 		is — and a type or an enumeration variant the module does not have
@@ -74,7 +74,7 @@ func index(): Str {
 		| [term](term.md) | ~BT~hive.term~BT~ | stdout, stderr, input, arguments, exit |
 		| [term-exec](term-exec.md) | ~BT~hive.term~BT~ | running another program |
 		| [env](env.md) | ~BT~hive.env~BT~ | the environment and ~BT~.env~BT~ |
-		| [task](task.md) | ~BT~hive.task~BT~ | ~BT~sleep~BT~, and where ~BT~with timeout~BT~ lives |
+		| [task](task.md) | ~BT~hive.task~BT~ | ~BT~sleep~BT~, ~BT~sleepForever~BT~, and where ~BT~with timeout~BT~ lives |
 		| [time](time.md) | ~BT~hive.time~BT~ | Unix seconds and ~BT~strftime~BT~ |
 		| [json](json.md) | ~BT~hive.json~BT~ | your types *are* the schema |
 		| [crypto](crypto.md) | ~BT~hive.crypto~BT~ | hashing, encoding, random |
@@ -276,9 +276,12 @@ func files(): Str {
 
 		**The separator is always written.** There are no optional parameters in Hive,
 		and a comma is a choice like any other rather than the one the language makes
-		on your behalf. Which reader a program names is also what lets the compiler
-		leave the others out of the build: one that reads a CSV carries neither
-		~BT~archive/zip~BT~ nor ~BT~encoding/xml~BT~.
+		on your behalf. It is one character, and a longer one is an error. Which reader
+		a program names is also what lets the compiler leave the others out of the
+		build: one that reads a CSV carries neither ~BT~archive/zip~BT~ nor ~BT~encoding/xml~BT~.
+
+		A CSV's rows keep the length they have — a ragged file is a ragged ~BT~Table~BT~ — blank
+		lines are skipped, and a byte-order mark at the start is dropped.
 
 		~CODE~hive
 		if hive.file.read("./notes.txt") is Result.Ok(text) \{
@@ -500,9 +503,10 @@ func env(): Str {
 
 		**It resolves in this order:**
 
-		1. the ~BT~.env~BT~ file in the program's own folder;
-		2. the ~BT~.env~BT~ in the parent folder;
-		3. the OS environment.
+		1. the ~BT~.env~BT~ file beside the executable;
+		2. the one in the working directory — the entrypoint's folder, under ~BT~hive run~BT~;
+		3. the ~BT~.env~BT~ in the parent folder of either;
+		4. the OS environment.
 
 		So a value put in a nearby ~BT~.env~BT~ wins over one exported in the shell.
 
@@ -526,7 +530,7 @@ func task(): Str {
 	return page.backticked(`
 		# ~BT~hive.task~BT~
 
-		The module is two things, and one of them has no call.
+		The module is three things, and one of them has no call.
 
 		## ~BT~sleep(ms)~BT~
 
@@ -539,6 +543,12 @@ func task(): Str {
 		~CODE~
 
 		A non-positive ~BT~ms~BT~ returns immediately.
+
+		## ~BT~sleepForever()~BT~
+
+		Parks the calling virtual thread for good — for a ~BT~main~BT~ that has started what
+		the program is for and has nothing left to do itself. The program still ends
+		where it would have: at ~BT~hive.term.exit~BT~, or when its last window closes.
 
 		## ~BT~TimeoutError~BT~
 
@@ -756,7 +766,8 @@ func json(): Str {
 		* A number is an ~BT~Int~BT~ where it reads as one and a ~BT~Float~BT~ otherwise, so
 		  ~BT~1.0~BT~ stays a ~BT~Float~BT~ both ways.
 		* An object's properties are a [map](map.md), in the order the document wrote
-		  them. A key written twice keeps its first place and its last value.
+		  them. A key written twice keeps its first place and its last value — as it
+		  does for a declared type — and text after the document is an error.
 		* Holding a map, a ~BT~JsonValue~BT~ has no order: ~BT~sort~BT~ over them takes the
 		  ~BT~func~BT~ that says which comes first.
 		* ~BT~null~BT~ is ~BT~Null()~BT~, wherever the document holds one.
@@ -1332,7 +1343,7 @@ func sql(): Str {
 
 		| ~BT~reason~BT~ | means |
 		| --- | --- |
-		| ~BT~"Connection"~BT~ | the database could not be reached |
+		| ~BT~"Connection"~BT~ | the database could not be opened or reached, or the connection is closed |
 		| ~BT~"Query"~BT~ | the statement itself failed |
 		| ~BT~"Shape"~BT~ | a different number of columns came back |
 		| ~BT~"Convert"~BT~ | a cell did not fit its field's type |
@@ -1358,9 +1369,11 @@ func syslink(): Str {
 
 		Addressable **services**, in this process or on another machine, reached by the
 		same statement either way. A service is long-lived, owns private state only it
-		can touch, and has an identity you can pass around.
+		can touch, and has an identity you can pass around: an ~BT~Address~BT~.
 
-		Every call is [syslink-calls](syslink-calls.md); across machines is
+		A service is started, named and stopped by three **builtins** — ~BT~spawn~BT~,
+		~BT~at~BT~ and ~BT~kill~BT~ — and what is left in the module is the node. Every call
+		is [syslink-calls](syslink-calls.md); across machines is
 		[syslink-nodes](syslink-nodes.md).
 
 		## The handler is one turn
@@ -1391,17 +1404,19 @@ func syslink(): Str {
 
 		proc main(): void \{
 			Str[dyn] empty = []
-			cache := hive.syslink.spawn(counter, empty)
-			async cache(Op.Add("hello"))
-			if cache(Op.Count()) is Result.Ok(reply) && reply is Op.Total(n) \{
-				echo n
+			if spawn(counter, empty) is Result.Ok(cache) \{
+				async cache(Op.Add("hello"))
+				if cache(Op.Count()) is Result.Ok(reply) && reply is Op.Total(n) \{
+					echo n
+				}
 			}
 		}
 		~CODE~
 
 		The compiler holds a handler to that shape where the service is started: its
 		first parameter takes the mutex, the state it starts with fits that parameter,
-		and it returns its own mailbox type.
+		and it returns its own mailbox type. ~BT~spawn~BT~ answers with a ~BT~Result~BT~, since
+		a service started under a name may find the name taken.
 
 		## The mailbox type is the whole protocol
 
@@ -1417,16 +1432,17 @@ func syslink(): Str {
 
 		A ~BT~panic~BT~ inside a service body **kills only that service**: its monitors are
 		told, its callers get ~BT~"Down"~BT~, and the node keeps running. **This is the one
-		place ~BT~panic~BT~ does not stop the program.**
+		place ~BT~panic~BT~ does not stop the program.** The node says so on standard error,
+		as ~BT~hive: service Counter crashed: <message>~BT~.
 
 		## A service that knows its own address
 
-		~BT~spawnAddressed(handler, state)~BT~ starts a handler that is also handed its own
-		address every turn, to register itself or to give to work it starts so that the
-		result comes back as a message:
+		A handler may take a third parameter, an ~BT~Address~BT~, and is then handed its
+		own address every turn — to give to work it starts, so that the result comes
+		back as a message. ~BT~spawn~BT~ takes either shape:
 
 		~CODE~hive
-		proc fetcher(pending: mut Int, note: Note, me: hive.syslink.Address): Note \{
+		proc fetcher(pending: mut Int, note: Note, me: Address): Note \{
 			if note is Note.Fetch(url) \{
 				pending += 1
 				async download(me, url)
@@ -1450,21 +1466,40 @@ func syslinkCalls(): Str {
 	return page.backticked(`
 		# ~BT~hive.syslink~BT~ — the calls
 
+		Three are **builtins**, reached with no module:
+
 		| call | answers with |
 		| --- | --- |
-		| ~BT~spawn(handler, state)~BT~ | ~BT~Address~BT~ — starts a service |
-		| ~BT~spawnAddressed(handler, state)~BT~ | ~BT~Address~BT~ — one whose handler is handed its own address |
-		| ~BT~register(name, address)~BT~ | ~BT~Result<Address, SyslinkError>~BT~ |
+		| ~BT~spawn(handler, state)~BT~ | ~BT~Result<Address, SyslinkError>~BT~ — starts a service |
+		| ~BT~spawn(handler, state, name)~BT~ | the same, registered under ~BT~name~BT~ |
 		| ~BT~at(name)~BT~ | ~BT~Address~BT~ — that service on **this** node |
-		| ~BT~on(endpoint, name)~BT~ | ~BT~Address~BT~ — the same service on **another** |
+		| ~BT~at(endpoint, name)~BT~ | ~BT~Address~BT~ — the same service on **another** |
+		| ~BT~kill(address)~BT~ | ~BT~void~BT~ — stops it |
+
+		The rest are the module's own, ~BT~hive.syslink.<call>~BT~:
+
+		| call | answers with |
+		| --- | --- |
 		| ~BT~monitor(watcher, target, notice)~BT~ | ~BT~void~BT~ |
-		| ~BT~stop(address)~BT~ | ~BT~void~BT~ |
 		| ~BT~listen(endpoint)~BT~ | ~BT~Result<Str, SyslinkError>~BT~ |
 		| ~BT~node()~BT~ | ~BT~Str~BT~ |
 		| ~BT~peers()~BT~ | ~BT~Str[dyn]~BT~ |
 
-		~BT~Address~BT~ is **opaque**: an address is produced by ~BT~spawn~BT~, ~BT~spawnAddressed~BT~,
-		~BT~at~BT~ or ~BT~on~BT~. A ~BT~SyslinkError~BT~ carries a ~BT~reason~BT~ and a ~BT~message~BT~.
+		~BT~Address~BT~ is a builtin type, and **opaque**: an address is produced by ~BT~spawn~BT~
+		or ~BT~at~BT~. A ~BT~hive.syslink.SyslinkError~BT~ carries a ~BT~reason~BT~ and a
+		~BT~message~BT~:
+
+		| ~BT~reason~BT~ | means |
+		| --- | --- |
+		| ~BT~"Taken"~BT~ | ~BT~spawn~BT~ was given a name another service holds |
+		| ~BT~"Down"~BT~ | the service died before answering, or was already gone — at once |
+		| ~BT~"NoProc"~BT~ | nothing is registered under that name on the node asked |
+		| ~BT~"Timeout"~BT~ | no answer within the time given, or the default |
+		| ~BT~"Unreachable"~BT~ | the node could not be reached |
+		| ~BT~"Decode"~BT~ | the message did not decode as the type the service takes |
+		| ~BT~"NoPeer"~BT~ | the address names no node to send to |
+		| ~BT~"NoListener"~BT~ | ~BT~listen~BT~ could not listen where it was told, or this node has not listened and was asked to reach another |
+		| ~BT~"NoKey"~BT~ | there is no cluster key to authenticate with |
 
 		## An address is called
 
@@ -1489,34 +1524,36 @@ func syslinkCalls(): Str {
 
 		## Names and addresses
 
-		~BT~register~BT~ publishes a service under an **atom** and answers ~BT~"Taken"~BT~ if it is
-		in use. **A service name is an atom**, which is what lets the compiler know the
-		whole registry.
+		A service is named as it is **spawned**, by an **atom**, and a name is one
+		service's at a time on a node: a second ~BT~spawn~BT~ under a name still held answers
+		~BT~"Taken"~BT~. One with no name has nothing to be refused, and is always ~BT~Ok~BT~.
 
-		~BT~at~BT~ and ~BT~on~BT~ **perform no I/O and cannot fail** — they are address
-		*construction*, not a lookup. Nothing is dialled until something is sent.
+		~BT~at~BT~ **performs no I/O and cannot fail** — it is address *construction*, not a
+		lookup. Nothing is dialled until something is sent.
 
 		~CODE~hive
-		if hive.syslink.register(#Cache, hive.syslink.spawn(counter, empty)) is Result.Error(why) \{
+		if spawn(counter, empty, #Cache) is Result.Error(why) \{
 			echo why.reason                       // "Taken"
 		}
 
-		here  := hive.syslink.at(#Cache)                          // this node
-		there := hive.syslink.on("10.0.0.4:9000", #Cache)          // another
+		here  := at(#Cache)                     // this node
+		there := at("10.0.0.4:9000", #Cache)    // another
 		~CODE~
 
 		**A named address is the only kind that survives its service being restarted**,
-		which is the reason to register one at all: an address from ~BT~spawn~BT~ names that
-		instance and nothing else.
+		which is the reason to name one at all: the address ~BT~spawn~BT~ answers with for a
+		service with no name is that instance and nothing else.
 
-		## Watching and stopping
+		## Watching and killing
 
 		~BT~monitor(watcher, target, notice)~BT~ posts ~BT~notice~BT~ to ~BT~watcher~BT~ — a service on
-		this node, such as ~BT~hive.syslink.at(#Supervisor)~BT~ or the address
-		~BT~spawnAddressed~BT~ hands a handler — when ~BT~target~BT~ dies. That is how a supervisor
-		is written, and it is why a crash being local is useful rather than merely quiet.
+		this node, such as ~BT~at(#Supervisor)~BT~ or the address a handler is handed — when
+		~BT~target~BT~ dies. That is how a supervisor is written, and it is why a crash
+		being local is useful rather than merely quiet.
 
-		~BT~stop(address)~BT~ ends a service.
+		~BT~kill(address)~BT~ ends a service, on this node or another. Its name is free
+		again before its monitors hear of it, so a supervisor can spawn the next one
+		under it straight away.
 	`)
 }
 
@@ -1526,7 +1563,7 @@ func syslinkNodes(): Str {
 
 		The same statement reaches a service in this process and one on another
 		machine. What changes is only how its address was built:
-		~BT~at(#Cache)~BT~ against ~BT~on("10.0.0.4:9000", #Cache)~BT~.
+		~BT~at(#Cache)~BT~ against ~BT~at("10.0.0.4:9000", #Cache)~BT~.
 
 		| call | answers with |
 		| --- | --- |
@@ -1544,7 +1581,8 @@ func syslinkNodes(): Str {
 
 		**~BT~listen~BT~ answers with the endpoint a peer should dial.** A port of ~BT~0~BT~ asks the
 		kernel to choose, and what comes back — and what ~BT~node()~BT~ says from then on —
-		carries the port it chose. The host is left as written.
+		carries the port it chose. The host is left as written, and the port is bound on
+		every interface — except a loopback host, which is bound as written.
 
 		**A node has no name.** It is identified by the endpoint it can be dialled at,
 		so a peer list is ordinary runtime data rather than a cluster configuration.
@@ -1580,7 +1618,7 @@ func syslinkNodes(): Str {
 		folds into ~BT~SyslinkError~BT~ with ~BT~reason~BT~ ~BT~"Timeout"~BT~:
 
 		~CODE~hive
-		if hive.syslink.on(endpoint, #Cache)(Op.Count()) with timeout 250 is Result.Error(why) \{
+		if at(endpoint, #Cache)(Op.Count()) with timeout 250 is Result.Error(why) \{
 			echo why.reason
 		}
 		~CODE~

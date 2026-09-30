@@ -154,9 +154,12 @@ func collectDetails(run: Str): Str[dyn] {
 func detailFor(details: Str[], name: Str): Str[dyn] {
 	mut Str[dyn] out = []
 	for each entry in details {
-		pieces := split(entry, "\t")
-		if text.charAt(pieces, 0) == name {
-			append(out, text.charAt(pieces, 1))
+		// Only the first tab is the one this file wrote; a test may print more.
+		if indexOf(entry, "\t") is Result.Ok(at) {
+			cs := text.chars(entry)
+			if text.span(cs, 0, at - 1) == name {
+				append(out, text.span(cs, at + 1, len(cs) - 1))
+			}
 		}
 	}
 	return out
@@ -177,6 +180,7 @@ func isNoise(line: Str): Bool {
 	return line == "PASS" || line == "FAIL" || text.startsWith(line, "ok  ")
 		|| text.startsWith(line, "?   ") || text.startsWith(line, "FAIL\t")
 		|| text.startsWith(line, "coverage: ") || text.startsWith(line, "exit status ")
+		|| text.contains(line, "\tcoverage: ")
 }
 
 func mangled(line: Str): Str {
@@ -247,9 +251,40 @@ proc renderCoverage(directory: Str): Str[dyn] {
 		}
 	}
 	if len(missed) > 0 {
-		append(out, "  never exercised: " + join(missed, ", "))
+		mut Str[dyn] shown = []
+		for each name in missed {
+			append(shown, readable(name))
+		}
+		append(out, "  never exercised: " + join(shown, ", "))
 	}
 	return out
+}
+
+// An imported declaration's flattened name, `text_0_pad`, the way its module
+// spells it: `text.pad`.
+func readable(name: Str): Str {
+	parts := split(name, "_")
+	if len(parts) < 3 || text.charAt(parts, 0) == "" {
+		return name
+	}
+	index := text.charAt(parts, 1)
+	if index == "" {
+		return name
+	}
+	for each c in text.chars(index) {
+		if text.isDigit(c) == false {
+			return name
+		}
+	}
+	mut Str[dyn] tail = []
+	mut i := 0
+	for each p in parts {
+		if i >= 2 {
+			append(tail, p)
+		}
+		i = i + 1
+	}
+	return text.charAt(parts, 0) + "." + join(tail, "_")
 }
 
 // One decimal place, without a floating-point round trip that would print

@@ -39,14 +39,15 @@ func blocks(): place.Block[dyn] {
 	return place.arena(seeded())
 }
 
-// An address nothing is listening to. `hive.syslink.at` performs no I/O and cannot
-// fail — it is address construction rather than a lookup — so a test may name a
-// service that was never started, and an `async` at it goes quietly nowhere.
+// An address nothing is listening to. `at` performs no I/O and cannot fail — it
+// is address construction rather than a lookup — so a test may name a service
+// that was never started, and an `async` at it goes quietly nowhere. It is
+// spelled `hive.at` here because this file declares an `at` of its own.
 //
 // Which is exactly what a test of the world wants: the referee really does send
 // its snapshots, to a real address, and there is nobody on the other end.
-func nowhere(): hive.syslink.Address {
-	return hive.syslink.at(#Nobody)
+func nowhere(): Address {
+	return hive.at(#Nobody)
 }
 
 // One player, whole, standing where they are put.

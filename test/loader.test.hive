@@ -5,6 +5,7 @@
 // they are about** and then load it. That is more work than a fixture on disk
 // and buys two things: the source of the program under test is next to the
 // assertion about it, and the suite does not care how it was invoked.
+import ../src/check
 import ../src/loader
 import ../src/show
 import ../src/text
@@ -169,6 +170,16 @@ test "two modules may each declare the same name and stay distinct" {
 	assert text.contains(got, "(type Align (| Centre))")
 }
 
+test"a builtin another module names is not captured by the entrypoint's declaration of it" {
+	put("lib/services.hive", "func home(): Address \{ return at(#Home) }\nfunc count(v: Str[]): Int \{ return len(v) }")
+	entry := put("capture.hive", "import ./lib/services\ntype Address \{ street: Str }\nfunc at(n: Int): Int \{ return n }\nproc main(): void \{ echo services.count([]) }")
+
+	got := treeOfFile(entry)
+	assert text.contains(got, "(func services_0_home () hive.Address (block (return (call (. hive at) #Home))))")
+	assert text.contains(got, "(call len v)")
+	assert text.contains(got, "(func at ((n Int)) Int")
+}
+
 test "a file is loaded once however many modules reach for it" {
 	put("lib/shared.hive", "func twice(n: Int): Int \{ return n * 2 }")
 	put("lib/middle.hive", "import ./shared\nfunc four(): Int \{ return shared.twice(2) }")
@@ -241,6 +252,56 @@ test "an import naming no file says so, and says where it looked" {
 	entry := put("missingImport.hive", "import ./lib/nowhere\nproc main(): void \{ }")
 	got := errorOfFile(entry)
 	assert text.startsWith(got, "cannot read `_program/lib/nowhere.hive`")
+}
+
+test "an import naming no file is reported at the import, in the file that wrote it" {
+	entry := put("missingAtLine.hive", "// the second line imports\nimport ./lib/nowhere\nproc main(): void \{ }")
+	p := loader.load(entry)
+	for each e in p.errors {
+		assert e.file == entry
+		assert e.line == 2
+	}
+	assert len(p.errors) == 1
+}
+
+test "a file whose name is no identifier still names Go identifiers" {
+	put("lib/text-utils.hive", "func hi(): Str \{ return \"hi\" }")
+	put("lib/2d.hive", "func origin(): Int \{ return 0 }")
+	entry := put("oddNames.hive", "import ./lib/text-utils as words\nimport ./lib/2d as plane\nproc main(): void \{ echo words.hi()  echo plane.origin() }")
+
+	got := treeOfFile(entry)
+	assert text.contains(got, "(func textutils_0_hi ")
+	assert text.contains(got, "(func m2d_1_origin ")
+}
+
+test "an error inside an imported module is reported in that module, by its own name" {
+	lib := put("lib/broken.hive", "func half(n: Int): Int \{ return \"no\" }")
+	entry := put("usesBroken.hive", "import ./lib/broken\nproc main(): void \{ echo broken.half(2) }")
+	p := loader.load(entry)
+	placed := loader.placed(p, entry, check.checkModule(p.module))
+	assert len(placed) == 1
+	for each d in placed {
+		assert d.file == lib
+		assert text.startsWith(d.message, "in `half`: ")
+	}
+}
+
+// Taking the prefix off once cost the message as many characters from its end.
+test "a message moved into its module loses its prefix and nothing else" {
+	put("lib/tail.hive", "func half(n: Str): Str \{ return n + 1 }")
+	entry := put("usesTail.hive", "import ./lib/tail\nproc main(): void \{ echo tail.half(\"2\") }")
+	p := loader.load(entry)
+	raw := check.checkModule(p.module)
+	placed := loader.placed(p, entry, raw)
+	assert len(raw) == 1
+	assert len(placed) == 1
+	for each d in raw {
+		assert text.startsWith(d.message, "in `tail_0_half`: ")
+		assert text.endsWith(d.message, "Str and Int")
+		for each moved in placed {
+			assert moved.message == text.replace(d.message, "tail_0_", "")
+		}
+	}
 }
 
 test "a Go file's exported functions arrive as ordinary funcs" {

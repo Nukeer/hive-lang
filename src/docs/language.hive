@@ -263,7 +263,7 @@ func types(): Str {
 		| type | holds |
 		| --- | --- |
 		| ~BT~Str~BT~ | UTF-8 text |
-		| ~BT~Int~BT~ | a 64-bit signed integer — exactly Go's ~BT~int~BT~; overflow **wraps** silently |
+		| ~BT~Int~BT~ | a 64-bit signed integer — exactly Go's ~BT~int~BT~; it never wraps, stopping at its largest or smallest value instead |
 		| ~BT~Float~BT~ | a 64-bit float |
 		| ~BT~Bool~BT~ | ~BT~true~BT~ or ~BT~false~BT~ |
 		| ~BT~Atom~BT~ | an interned symbol, written ~BT~#Name~BT~ |
@@ -361,8 +361,10 @@ func types(): Str {
 
 		Built by calling the type or the variant — ~BT~User(1, "ada")~BT~, ~BT~Shape.Circle(5)~BT~,
 		~BT~Shape.Point()~BT~ — and narrowed with ~BT~is~BT~. **There is no other way to reach a
-		variant's fields**: a value typed as the union has only what every variant
-		shares.
+		variant's fields**: a value typed as the union has only the fields declared
+		outside its variants, read straight off it (~BT~event.at~BT~) — never assigned into,
+		since a union value is built whole. A field every variant declares for itself
+		still belongs to the variants.
 
 		A type may recurse **through a variant** (an expression tree does); a struct may
 		not contain itself directly, since it would have no finite size.
@@ -388,6 +390,14 @@ func types(): Str {
 		  land somewhere that says. ~BT~m := hive.map.new()~BT~ is a compile error.
 		* A map is **reached by key, never by position**. ~BT~m[0]~BT~ is a compile error and
 		  so is ~BT~for each~BT~ over one.
+
+		## Address
+
+		A [service](stdlib/syslink.md), in this process or on another machine — what
+		~BT~spawn~BT~ and ~BT~at~BT~ answer with, and what a call sends to: ~BT~box(message)~BT~.
+		An address is an ordinary value, stored, passed and carried inside a message, and
+		it has no order. It is one type rather than one per protocol. A program that
+		declares its own ~BT~Address~BT~ still has the builtin as ~BT~hive.Address~BT~.
 
 		## Assignability
 
@@ -505,7 +515,8 @@ func declarations(): Str {
 		variables in a ~BT~func~BT~ are its own, so whatever a ~BT~proc~BT~ it calls writes through,
 		the caller cannot see it. A ~BT~proc~BT~ may do everything a ~BT~func~BT~ may, plus hold a
 		mutex. Programs start at ~BT~proc main(): void~BT~, in the file handed to
-		~BT~hive build~BT~ / ~BT~hive run~BT~.
+		~BT~hive build~BT~ / ~BT~hive run~BT~; any other signature for ~BT~main~BT~ is refused — the
+		command line is ~BT~hive.term.args()~BT~ and an exit status ~BT~hive.term.exit(code)~BT~.
 
 		Parameters are ~BT~name: Type~BT~, or ~BT~name: mut Type~BT~ in a ~BT~proc~BT~. Every callable
 		declares a return type, ~BT~void~BT~ included.
@@ -516,7 +527,8 @@ func declarations(): Str {
 		by ending in:
 
 		* ~BT~return~BT~;
-		* ~BT~assert~BT~ or ~BT~panic~BT~ — both handy for a tail you know is unreachable;
+		* ~BT~panic~BT~, or a call to ~BT~hive.term.exit~BT~ — both handy for a tail you know
+		  is unreachable (an ~BT~assert~BT~ that holds carries on, so it does not count);
 		* an ~BT~if~BT~/~BT~else~BT~ whose every branch terminates; or
 		* an **else-less** ~BT~if~BT~/~BT~else if~BT~ chain that covers its subject's whole type — a
 		  ~BT~Result~BT~'s ~BT~Ok~BT~ and ~BT~Error~BT~, or every variant of a declared union.
@@ -661,8 +673,8 @@ func expressions(): Str {
 
 		## Calls and named arguments
 
-		Funcs, procs, queries and type constructors — builtin ones included — accept
-		arguments by name:
+		Funcs, procs, queries and type constructors — the library's own record types
+		included — accept arguments by name:
 
 		~CODE~hive
 		f(b: 1, "s")
@@ -670,7 +682,10 @@ func expressions(): Str {
 
 		Named arguments may appear anywhere; only the unnamed ones need to be in order.
 		Names must exist, must not repeat, and **once named arguments are used the call
-		must cover the full parameter list**.
+		must cover the full parameter list**. They are evaluated in the order written.
+		A builtin and a library call take names too — ~BT~join(sep: ",", vector: v)~BT~,
+		~BT~hive.math.clamp(value: x, low: 0.0, high: 1.0)~BT~ — by the names their pages
+		give them.
 
 		### Piping a value in
 
@@ -715,9 +730,11 @@ func expressions(): Str {
 		~BT~mut~BT~ variable wherever the type says ~BT~mut~BT~ — and by position only: its
 		parameters have no names, so a named argument is refused.
 
-		Two things cannot become values: a **generic** callable, and a callable with a
-		**statically-sized parameter** beyond one immutable local binding it is called
-		through.
+		Two things cannot become values: a **builtin** or **library call** (neither a
+		bare reference nor a ~BT~_~BT~ hole makes one — wrap it in a ~BT~func~BT~ of your own), and
+		a **generic** callable. A callable with a statically-sized parameter is a value
+		whose type carries the promise ([bounds](bounds.md)). What a partial application
+		is given is captured when it is written, not read again at each call.
 
 		## Member access, indexing, slicing
 
@@ -732,8 +749,9 @@ func expressions(): Str {
 		| expression | result |
 		| --- | --- |
 		| ~BT~a / 0~BT~, ~BT~a % 0~BT~ | ~BT~0~BT~ — division by zero is a value, not a crash |
-		| ~BT~Int~BT~ overflow | wraps, two's-complement, silently |
-		| ~BT~2 ** 100~BT~ | ~BT~0~BT~ — that wrap, reached by repeated multiplication |
+		| ~BT~Int~BT~ overflow | stays at the edge it would pass: ~BT~MAX + 1~BT~ is ~BT~MAX~BT~, ~BT~MIN - 1~BT~ is ~BT~MIN~BT~ |
+		| ~BT~2 ** 100~BT~ | ~BT~9223372036854775807~BT~ — that edge, reached by repeated multiplication |
+		| ~BT~-MIN~BT~, ~BT~MIN * -1~BT~, ~BT~MIN / -1~BT~ | ~BT~MAX~BT~ |
 		| ~BT~n ** k~BT~, ~BT~k < 0~BT~ on ~BT~Int~BT~ | ~BT~0~BT~, including ~BT~1 ** -1~BT~ |
 		| ~BT~n ** 0~BT~ | ~BT~1~BT~ |
 		| ~BT~-7 % 3~BT~ | ~BT~-1~BT~ — the remainder takes the sign of the dividend |
@@ -780,7 +798,13 @@ func statements(): Str {
 		~BT~:=~BT~ infers the type from the value, **including a static vector length**.
 		~BT~=~BT~ with a type in front states it, and is the **only** way to say ~BT~[dyn]~BT~, to
 		say ~BT~Str[3]~BT~ as a promise rather than an observation, or to give a
-		~BT~hive.map.new()~BT~ somewhere to land.
+		~BT~hive.map.new()~BT~ somewhere to land. Only a ~BT~[dyn]~BT~ vector grows: an inferred
+		length is a length all the same, so a ~BT~mut~BT~ one is rebound only to as many.
+
+		A name is declared **once per block** (an inner block may shadow it); ~BT~_~BT~ as often
+		as you like. A call that answers with nothing cannot be bound, and a statement
+		that is only an expression has to be a call — ~BT~x + 1~BT~ alone is refused, and
+		~BT~_ := x + 1~BT~ drops a value on purpose.
 
 		A binding is **immutable** unless it says ~BT~mut~BT~. An immutable name may not be
 		reassigned, may not be written through (~BT~v[i] = …~BT~, ~BT~v.f = …~BT~), and may not be
@@ -822,7 +846,7 @@ func statements(): Str {
 		for ; cond; \{ }                      // any clause may be omitted: a while loop
 
 		for each name in values \{ }
-		for each name: T in values \{ }       // the annotation overrides inference
+		for each name: T in values \{ }       // the annotation states the element type
 		~CODE~
 
 		The counter is scoped to the loop and **implicitly mutable**, so it needs no
@@ -847,13 +871,14 @@ func statements(): Str {
 		~BT~assert cond~BT~ says this must hold, and **where it is written decides what
 		happens when it does not**: in ordinary code a failure has proved the *program*
 		wrong, so it stops; inside a ~BT~test~BT~ it has proved the *test* wrong, so the
-		failure is recorded and the suite carries on. Its operands are evaluated exactly
+		failure is recorded and the suite carries on. Outside a test a failure prints the
+		condition as written, and both sides of an ~BT~==~BT~ or ~BT~!=~BT~. Its operands are evaluated exactly
 		once either way.
 
 		~BT~panic value~BT~ stops the program immediately, rendering ~BT~value~BT~ exactly as ~BT~echo~BT~
 		would. It takes any value rather than only a ~BT~Bool~BT~, and never returns — so a
 		branch ending in one counts as a terminating path. The single exception to
-		"stops the program" is inside a [~BT~hive.syslink~BT~](stdlib/syslink.md) service,
+		"stops the program" is inside a [service](stdlib/syslink.md),
 		where a panic kills only that service.
 
 		## ~BT~async~BT~ as a statement
@@ -1210,8 +1235,8 @@ func concurrency(): Str {
 		  stopped from outside, so the call runs on and only its result is dropped.
 		* A ~BT~void~BT~ call has no value for the ~BT~Result~BT~ to carry, so bounding one is
 		  refused.
-		* On a [~BT~hive.syslink~BT~](stdlib/syslink.md) request the clause folds into that
-		  module's own error rather than wrapping a second ~BT~Result~BT~ around the first.
+		* On a request to a [service](stdlib/syslink.md) the clause folds into the
+		  request's own error rather than wrapping a second ~BT~Result~BT~ around the first.
 
 		## Threads and mutex arguments
 
@@ -1298,12 +1323,11 @@ func proofs(): Str {
 		after the reassignment, and a ~BT~Str[3]~BT~ parameter is indexed inside the callee
 		without a guard.
 
-		**A promise restricts a callable as a value.** One with a statically-sized
-		parameter may be bound to an **immutable name** and called through it — those
-		calls are checked exactly as direct ones are — but may **not** be handed on any
-		further: passed as an argument, returned, or stored in a vector or field.
-		Declaring the parameter ~BT~Str[dyn]~BT~ or ~BT~Str[]~BT~ lifts every restriction, at the
-		cost of guarding the index inside the callee.
+		**A promise travels with a callable as a value.** ~BT~f := takes~BT~ is a
+		~BT~proc(Str[3]): void~BT~, and every call through it — or through a parameter, field
+		or vector holding it — is checked exactly as a direct one is. So it fills only a
+		slot that promises as much: a ~BT~proc(Str[]): void~BT~ parameter would hand it any
+		length, and passing ~BT~takes~BT~ there is a compile error.
 
 		## An inferred length is weaker
 
@@ -1587,7 +1611,9 @@ func builtins(): Str {
 	return page.backticked(`
 		# Builtins
 
-		Always in scope, no import needed. Several are overloaded by argument type.
+		Always in scope, no import needed. Several are overloaded by argument type, so
+		a builtin is only ever called, never used as a value or partially applied. Its
+		arguments may be named by the names in the first column: ~BT~join(sep: ",", vector: v)~BT~.
 
 		| function | signature | what it does |
 		| --- | --- | --- |
@@ -1609,6 +1635,9 @@ func builtins(): Str {
 		| ~BT~filterMap~BT~ | ~BT~(T[], func(T): Result<K, E>): K[dyn]~BT~ | transform and select in one pass |
 		| ~BT~sort~BT~ | ~BT~(T[]): T[dyn]~BT~ / ~BT~(T[], func(T, T): Bool): T[dyn]~BT~ | in order |
 		| ~BT~encode~BT~ | ~BT~(T, hive.codec.Codec<E>): Str~BT~ | written in the format the codec names |
+		| ~BT~spawn~BT~ | ~BT~(handler, S): Result<Address, SyslinkError>~BT~ / ~BT~(handler, S, Atom): …~BT~ | starts a service, optionally registered under a name |
+		| ~BT~at~BT~ | ~BT~(Atom): Address~BT~ / ~BT~(Str, Atom): Address~BT~ | a named service on this node / on the node at an endpoint |
+		| ~BT~kill~BT~ | ~BT~(Address): void~BT~ | stops a service |
 
 		~BT~len~BT~ and ~BT~bytes~BT~ differ only for strings: for ~BT~"café"~BT~, ~BT~len~BT~ is ~BT~4~BT~ and ~BT~bytes~BT~
 		is ~BT~5~BT~. ~BT~replaceFirst~BT~ and ~BT~replaceAll~BT~ **answer with a new string**, take plain
@@ -1629,6 +1658,12 @@ func builtins(): Str {
 		value** — held in a variable, passed, stored — because its type,
 		~BT~hive.codec.Codec<E>~BT~, already says the format. Its other half is
 		~BT~T.decode(text, codec)~BT~ — see [json](../stdlib/json.md).
+
+		~BT~spawn~BT~, ~BT~at~BT~ and ~BT~kill~BT~ are [services](stdlib/syslink.md). A handler is
+		~BT~proc(mut S, M): M~BT~, or ~BT~proc(mut S, M, Address): M~BT~ to be handed its own
+		address every turn, and ~BT~spawn~BT~ takes either. A name is one service's at a time,
+		so a second ~BT~spawn~BT~ under a name still held answers ~BT~"Taken"~BT~; one with no name
+		is always ~BT~Ok~BT~. ~BT~at~BT~ builds an address and looks nothing up.
 
 		## A declaration of your own wins
 
@@ -1827,6 +1862,7 @@ func queries(): Str {
 		| --- | --- | --- |
 		| ~BT~Row[dyn]~BT~ (a declared type) | ~BT~Fragment<Row[dyn]>~BT~ | ~BT~Result<Row[dyn], hive.sql.SqlError>~BT~ |
 		| ~BT~Str[dyn]~BT~, ~BT~Int[dyn]~BT~, … | ~BT~Fragment<Str[dyn]>~BT~ | that column, as a vector |
+		| ~BT~Table~BT~ | ~BT~Fragment<Table>~BT~ | ~BT~Result<Table, hive.sql.SqlError>~BT~ — a header row, then every row as text |
 		| ~BT~void~BT~ | ~BT~Fragment<void>~BT~ | ~BT~Result<Int, hive.sql.SqlError>~BT~ — the rows it affected |
 
 		Because a fragment is a value, it can be bound, passed and held like any other
@@ -1838,6 +1874,8 @@ func queries(): Str {
 		* **Columns match fields by name**, so reordering the ~BT~SELECT~BT~ cannot silently
 		  remap them. A column whose name differs from its field needs an alias
 		  (~BT~SELECT u.name AS author~BT~). A row type holds scalars only.
+		* **A ~BT~Table~BT~ takes whatever comes back**, so it is the one result ~BT~SELECT *~BT~
+		  fills.
 		* **~BT~SELECT *~BT~ against a declared row type is a compile error.** It says neither
 		  how many columns come back nor what they are called. The rule is about the
 		  *result*, so ~BT~count(*)~BT~, ~BT~a * 2~BT~, a star inside a subquery and a ~BT~void~BT~
@@ -2024,13 +2062,15 @@ func cli(): Str {
 		* **~BT~hive build~BT~** leaves the executable beside the entrypoint and the generated
 		  Go module in ~BT~<entrypoint>-build/~BT~.
 		* **~BT~hive emit~BT~** prints the Go to stdout, so ~BT~hive emit x.hive > main.go~BT~
-		  works — progress goes to stderr for exactly that reason.
+		  works — progress and every error go to stderr for exactly that reason.
 		* **~BT~hive analyze~BT~** scores what the program will cost to run. It builds
 		  nothing and runs nothing, so it answers about as fast as ~BT~check~BT~ does.
 
 		~BT~--target~BT~ belongs to ~BT~build~BT~ and ~BT~export~BT~; ~BT~go tool dist list~BT~ names every
 		platform ~BT~build~BT~ takes. A flag a command does not know is **refused rather than
-		quietly dropped**.
+		quietly dropped**, and so is anything after the entrypoint of a command that
+		takes nothing more. A compile error opens with ~BT~file:line:~BT~ — in the imported
+		file it happened in — and a usage error with ~BT~hive:~BT~; both exit non-zero.
 
 		## ~BT~hive export~BT~
 
@@ -2119,7 +2159,8 @@ func cli(): Str {
 		## ~BT~hive container~BT~
 
 		Writes a Dockerfile into the folder it runs in — ~BT~Dockerfile~BT~, or
-		~BT~Dockerfile-hive-container~BT~ when one is already there — and says which:
+		~BT~Dockerfile-hive-container~BT~ when one is already there — and says which. A program
+		that does not compile gets its errors instead, as ~BT~hive check~BT~ would give them:
 
 		~CODE~
 		hive container main.hive
@@ -2277,8 +2318,8 @@ func pitfalls(): Str {
 
 		## Generics and values
 
-		**A generic callable cannot be used as a value**, and neither can one with a
-		statically-sized parameter it is handed on from.
+		**A generic callable cannot be used as a value**, and neither can a builtin or a
+		library call, bare or partially applied.
 
 		**A type variable that appears only in the return type** cannot be inferred.
 

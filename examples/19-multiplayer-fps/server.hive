@@ -68,11 +68,11 @@
 //     serialisation layer in this program — there are four one-line funcs in that
 //     file, and they are all of it.
 //
-//   * **`hive.syslink`** does the locking, so nothing else has to. Every one of
+//   * **A service** does the locking, so nothing else has to. Every one of
 //     those reader threads, plus the clock, funnels into **one service**:
 //     `referee`, below. A service handles one message at a time, so the world is
 //     stepped, shot at, joined and left one message at a time, and nothing in this
-//     file locks anything. Note that this is `syslink` doing the job it does *inside* a
+//     file locks anything. Note that this is a service doing the job it does *inside* a
 //     process — nothing here `listen`s, and no service on this node is reachable
 //     from another machine. The network is websockets from end to end.
 //
@@ -86,8 +86,8 @@
 // write happens on that service's own turn, and the worst a hung client can do is
 // let its own outbox grow.
 //
-// It is also why a `hive.syslink.Address` travels inside `Note.Sit`: an address is
-// an ordinary value, so "here is how to reach my client" is a field.
+// It is also why an `Address` travels inside `Note.Sit`: an address is an
+// ordinary value, so "here is how to reach my client" is a field.
 
 import ./lib/place
 import ./lib/wire
@@ -144,7 +144,7 @@ type Seat {
 	who: Str
 	// How to reach them. An address is a value, so a way of talking to somebody is
 	// a field like their name is.
-	post: hive.syslink.Address
+	post: Address
 	x: Float
 	y: Float
 	z: Float
@@ -182,7 +182,7 @@ type World {
 // The referee's mailbox. Four things arrive here: somebody sitting down, something a
 // client said, somebody's socket closing, and the clock.
 type Note {
-	Sit { who: Str, post: hive.syslink.Address }
+	Sit { who: Str, post: Address }
 	// The answer to a `Sit`, and the only answer anybody waits for.
 	Seated { seat: Int }
 	Heard { seat: Int, up: wire.Up }
@@ -248,11 +248,11 @@ func seatOf(world: World, seat: Int): Seat {
 // client that has just hung up harmless rather than a special case. The address in
 // it is never called: `number` is zero, and every caller checks that first.
 func vacant(): Seat {
-	return Seat(0, "", hive.syslink.at(#Nobody), 0.0, 0.0, 0.0, 0.0, 0, 0, 0, 0, 0,
+	return Seat(0, "", at(#Nobody), 0.0, 0.0, 0.0, 0.0, 0, 0, 0, 0, 0,
 		0, 0, 0)
 }
 
-func joinedAt(world: World, number: Int, who: Str, post: hive.syslink.Address): Seat {
+func joinedAt(world: World, number: Int, who: Str, post: Address): Seat {
 	where := place.spot(number, world.seed)
 	return Seat(number, who, post, where.x, 0.0, where.z, where.yaw, 100,
 		place.breath(), 0, 0, 0, 0, 0, 0)
@@ -777,7 +777,7 @@ func shortened(text: Str, most: Int): Str {
 // milliseconds of overhead between those two make the horde a shade slower than
 // real time. Nothing in the game can tell — but it is worth knowing that the
 // number in the message is the number this loop *intends*, not a clock reading.
-proc keeping(desk: hive.syslink.Address): void {
+proc keeping(desk: Address): void {
 	for ;; {
 		hive.task.sleep(33)
 		async desk(Note.Tick(33))
@@ -786,7 +786,7 @@ proc keeping(desk: hive.syslink.Address): void {
 
 // One client, one thread, and all it does is read. `wsServe` calls this once per
 // connection; when it returns, the connection closes.
-proc seated(desk: hive.syslink.Address, connection: hive.net.WsConnection): void {
+proc seated(desk: Address, connection: hive.net.WsConnection): void {
 	opening := hive.net.wsRequest(connection)
 	// The request that opened the connection is still there, so a handler can route
 	// on its url or authenticate from its headers before saying anything. This one
@@ -795,7 +795,12 @@ proc seated(desk: hive.syslink.Address, connection: hive.net.WsConnection): void
 
 	// The socket's own service. From here on this thread never writes to it: it
 	// hands lines to `post` and posts hand them to the socket.
-	post := hive.syslink.spawn(posting, Link.Live(connection))
+	if spawn(posting, Link.Live(connection)) is Result.Ok(post) {
+		reading(desk, connection, post)
+	}
+}
+
+proc reading(desk: Address, connection: hive.net.WsConnection, post: Address): void {
 	mut Int seat = 0
 
 	for ;; {
@@ -884,7 +889,10 @@ proc main(): void {
 	}
 
 	world := mustered()
-	desk := hive.syslink.spawn(referee, world)
+	if spawn(referee, world, #Desk) is Result.Error(problem) {
+		panic problem
+	}
+	desk := at(#Desk)
 	async keeping(desk)
 
 	echo "the arena is at {reachedAt(port)}"

@@ -25,15 +25,15 @@
 //
 // WHAT DOES THE WORK
 // ------------------
-// A window is a `hive.syslink` service. That is the whole design here: the
-// window publishes *itself* under a name, so the other node reaches the screen
-// by calling an address, exactly as it would reach any other service.
+// A window is a service. That is the whole design here: the window is spawned
+// under a name, so the other node reaches the screen by calling an address,
+// exactly as it would reach any other service.
 //
-//   hive.syslink.register(#Chat, window)   // on this node
-//   hive.syslink.on(peer, #Chat)           // on the other one
+//   spawn(ui.window(title, view, update), model, #Chat)   // on this node
+//   at(peer, #Chat)                                       // on the other one
 //
-// `window` is the window's own address, which `ui.windowAddressed` hands to
-// `update` on every turn.
+// `update` takes the window's own address third, so it is handed it on every
+// turn.
 //
 // There is no protocol to write down. A message is a value of one user type and
 // the compiler derives the codec from it, so nothing here formats a line, parses
@@ -56,11 +56,11 @@ import hive.ui
 // what the other node sends, because they arrive at the same `update` and there
 // is only one of it.
 //
-// Worth being plain about the cost: publishing the window under a name puts this
-// whole type on the wire, so a peer could post `Left` as easily as `Spoke`. A
-// second service, registered separately and holding only the four remote
-// variants, is what a program with untrusted peers would do — and it would be
-// the same three calls, twice.
+// Worth being plain about the cost: naming the window puts this whole type on
+// the wire, so a peer could post `Left` as easily as `Spoke`. A second service,
+// spawned under a name of its own and holding only the four remote variants, is
+// what a program with untrusted peers would do — and it would be one more
+// `spawn`.
 type Msg {
 	// From the screen.
 	NameTyped { text: Str }
@@ -414,7 +414,7 @@ func sentOf(_typed: Str): Msg {
 // from the other machine arrive here the same way and are told apart only by
 // which variant they are — which is the whole claim `hive.syslink` makes, and it
 // holds right down to there being one `is` chain for both.
-proc update(model: mut Model, msg: Msg, window: hive.syslink.Address): Msg {
+proc update(model: mut Model, msg: Msg, window: Address): Msg {
 	if msg is Msg.NameTyped(text) {
 		model.me = text
 	} else if msg is Msg.PeerTyped(text) {
@@ -428,7 +428,11 @@ proc update(model: mut Model, msg: Msg, window: hive.syslink.Address): Msg {
 	} else if msg is Msg.Left {
 		leaving(model)
 	} else if msg is Msg.Knock(endpoint, who) {
-		// A knock is the only message anything waits for an answer to.
+		// A knock is the only message anything waits for an answer to. Nobody in
+		// the lobby has said who they are, so the knocking `greet` tries again.
+		if model.screen is Screen.Lobby {
+			return msg
+		}
 		wave := Msg.Wave(model.mine, model.me)
 		model = met(model, endpoint, who, clock())
 		model.nodes = hive.syslink.peers()
@@ -448,19 +452,7 @@ proc update(model: mut Model, msg: Msg, window: hive.syslink.Address): Msg {
 	return msg
 }
 
-// Joining publishes the window and goes knocking. Both are worth reading twice.
-//
-// The registration is what makes the screen addressable from another machine,
-// and it happens *here* rather than in `main` because `main` never holds the
-// window's address. `Taken` means this window is already published, which is
-// what rejoining after a Leave looks like.
-proc joined(model: mut Model, window: hive.syslink.Address): void {
-	if hive.syslink.register(#Chat, window) is Result.Error(problem) {
-		if problem.reason != "Taken" {
-			model.trouble = "Could not publish this window — {problem.message}"
-			return
-		}
-	}
+proc joined(model: mut Model, window: Address): void {
 	// Off the window's thread. A greeting is a *waited* call and a turn must not
 	// wait: a screen that stops repainting while it dials is the one thing a
 	// window may never do.
@@ -472,22 +464,22 @@ proc joined(model: mut Model, window: hive.syslink.Address): void {
 
 // "Is anybody there?", asked properly. This is the one call in the program that
 // waits for an answer, and therefore the one that can report a failure — an
-// unreachable node, a service not yet registered and a timeout all arrive here
-// as a `Result.Error`.
+// unreachable node, a window not spawned yet and a timeout all arrive here as a
+// `Result.Error`.
 //
 // It retries because both nodes are usually started within a second of each
-// other, and whichever one knocks first would otherwise knock at a window that
-// has not been published yet. A handshake that is a *request* rather than a
-// send is what makes that detectable at all.
+// other, and whichever one knocks first would otherwise knock at a node that is
+// not up yet, or at a window still in its lobby. A handshake that is a
+// *request* rather than a send is what makes that detectable at all.
 //
 // Retrying is safe because a knock is idempotent: `met` renames an endpoint it
 // already knows rather than adding it again. That matters in practice — the
 // first attempt can time out while the pipe to a brand-new node is still being
 // set up, and the second one then arrives at a peer that has already answered
 // the first.
-proc greet(peer: Str, mine: Str, me: Str, window: hive.syslink.Address): void {
+proc greet(peer: Str, mine: Str, me: Str, window: Address): void {
 	for i := 0; i < 5; i++ {
-		far := hive.syslink.on(peer, #Chat)
+		far := at(peer, #Chat)
 		answer := far(Msg.Knock(mine, me)) with timeout 2000
 		if answer is Result.Ok(reply) {
 			if reply is Msg.Wave(endpoint, who) {
@@ -513,18 +505,18 @@ proc sent(model: mut Model): void {
 	if model.draft == "" {
 		return
 	}
-	at := clock()
+	when := clock()
 	for each friend in model.here {
-		far := hive.syslink.on(friend.endpoint, #Chat)
-		async far(Msg.Spoke(model.me, model.draft, at))
+		far := at(friend.endpoint, #Chat)
+		async far(Msg.Spoke(model.me, model.draft, when))
 	}
-	model = spoke(model, model.me, model.draft, at)
+	model = spoke(model, model.me, model.draft, when)
 	model.draft = ""
 }
 
 proc leaving(model: mut Model): void {
 	for each friend in model.here {
-		far := hive.syslink.on(friend.endpoint, #Chat)
+		far := at(friend.endpoint, #Chat)
 		async far(Msg.Parted(model.mine, model.me))
 	}
 	model.screen = Screen.Lobby()
@@ -609,5 +601,8 @@ proc main(): void {
 	// Chrome or Edge in app mode, and an ordinary tab where there is none.
 	// Nothing is linked in for it, so this still builds offline into one
 	// executable with no dependencies.
-	ui.windowAddressed("Hive Chat — {mine}", view, update, fresh(mine, facing(mine)))
+	opened := spawn(ui.window("Hive Chat — {mine}", view, update), fresh(mine, facing(mine)), #Chat)
+	if opened is Result.Error(problem) {
+		panic problem
+	}
 }

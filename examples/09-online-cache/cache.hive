@@ -97,7 +97,7 @@ proc cache(node: mut Node, msg: Cache): Cache {
 		// and this turn cannot be held up by a slow or absent peer — that form of
 		// send never blocks and never fails.
 		for each endpoint in node.peers {
-			peer := hive.syslink.on(endpoint, #Cache)
+			peer := at(endpoint, #Cache)
 			async peer(Cache.Invalidate(name))
 		}
 		return Cache.Stored(name)
@@ -140,7 +140,7 @@ proc handler(
 ): hive.net.HttpResponse {
 	// `at` reaches a service on this node without needing to know where "here"
 	// is. Only the service name is an atom.
-	mine := hive.syslink.at(#Cache)
+	mine := at(#Cache)
 
 	if req.method == "POST" && req.url is "/set/{name}" {
 		stored := mine(Cache.Store(name, req.body)) with timeout 2000
@@ -170,7 +170,7 @@ proc handler(
 		// instead — `await [a(...), b(...)] with timeout 2000` is one barrier with
 		// a single deadline for all of them.
 		for each endpoint in peers {
-			peer := hive.syslink.on(endpoint, #Cache)
+			peer := at(endpoint, #Cache)
 			answer := peer(Cache.Lookup(name)) with timeout 2000
 			if answer is Result.Ok(reply) && reply is Cache.Found(_, value) {
 				return plain(200, value)
@@ -226,8 +226,7 @@ proc main(): void {
 			panic err
 		}
 
-		box := hive.syslink.spawn(cache, Node(db, peers))
-		if hive.syslink.register(#Cache, box) is Result.Error(err) {
+		if spawn(cache, Node(db, peers), #Cache) is Result.Error(err) {
 			panic err
 		}
 

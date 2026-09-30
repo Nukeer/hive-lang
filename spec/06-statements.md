@@ -14,7 +14,9 @@ mut Str[dyn] v = expr        // annotated, reassignable
 `:=` infers the type from the value, **including a static vector length**. `=`
 with a type in front states it, and is the only way to say `[dyn]`, to say
 `Str[3]` as a promise rather than an observation, or to give a
-`hive.map.new()` somewhere to land.
+`hive.map.new()` somewhere to land. Only a vector declared `[dyn]` grows: an
+inferred length is a length all the same, so `mut v := ["a"]` is rebound only to
+another vector of one, and is never `append`ed to.
 
 A binding is **immutable** unless it says `mut`. An immutable name may not be
 reassigned, may not be written through (`v[i] = …`, `v.f = …`), and may not be
@@ -23,7 +25,17 @@ reassigned, may not be written through (`v[i] = …`, `v.f = …`), and may not 
 A binding whose right-hand side names existing storage may **copy** it; see
 [08](08-mutability-and-values.md#84-copy-on-binding).
 
-`_ := expr` throws the value away.
+`_ := expr` throws the value away, and may be written as often as a block likes.
+Every other name is declared **once per block**: declaring it again in the same
+block is a compile error — assign to it instead — while an inner block may shadow
+it. A parameter belongs to the body's own block.
+
+A call that answers with nothing cannot be bound — `v := log("x")` has nothing
+for `v` to hold — and neither can an `async` call to one.
+
+**A statement that is only an expression has to be a call** (or an await-all, or
+a call `with timeout`). A value computed and then dropped — `x + 1` on a line of
+its own — is a compile error; `_ := x + 1` is how to drop one on purpose.
 
 ## 6.2 Assignment
 
@@ -81,11 +93,12 @@ running on another thread has nothing to advance it with.
 
 ```hive
 for each name in values { ... }
-for each name: T in values { ... }   // the annotation overrides inference
+for each name: T in values { ... }   // the annotation states the element type
 ```
 
 `for each` walks a vector, binding each element to an **immutable** `name` whose
-type is inferred from the vector. It never indexes, so it needs no bounds proof.
+type is inferred from the vector. An annotation says the same thing out loud, and
+one the element does not fit is a compile error. It never indexes, so it needs no bounds proof.
 `for each` over a map is a compile error ([03](03-types.md#36-maps)).
 
 **`break`** leaves the innermost enclosing loop and **`continue`** skips to its
@@ -119,7 +132,15 @@ those it **is** quoted, which is what tells `["1", "2"]` from `[1, 2]` and from
 * inside a `test`, it has proved the *test* wrong, so the failure is recorded and
   the rest of the suite still runs ([16](16-testing.md)).
 
-Its operands are evaluated **exactly once**, whether it holds or not.
+Its operands are evaluated **exactly once**, whether it holds or not. Outside a
+test, a failed assertion stops the program printing the condition as written —
+and for `==` and `!=`, what each side was:
+
+```
+panic: hive: assertion failed: total == 10
+  left:  9
+  right: 10
+```
 
 ## 6.8 `panic`
 
@@ -132,7 +153,7 @@ Because it never returns, a branch or tail ending in `panic` counts as a
 terminating path, so `panic "unreachable"` can close off an impossible tail.
 
 The one exception to "stops the program" is inside a
-[`hive.syslink`](14-stdlib.md#1410-hivesyslink) service, where a panic kills only
+[service](14-stdlib.md#1410-hivesyslink), where a panic kills only
 that service and leaves the node running.
 
 ## 6.9 `async` as a statement

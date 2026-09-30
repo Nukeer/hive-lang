@@ -1,7 +1,11 @@
 # 13 — Builtins
 
 These are always in scope — no import needed. Several are overloaded by argument
-type.
+type, which is why a builtin is only ever **called**: neither a bare reference
+nor a `_` hole makes one a value. Wrap it in a `func` of your own to pass it
+around. Its arguments may be named like any call's, by the names in the first
+column below; a position overloaded by type answers to each of its names, so
+`indexOf(str: s, sub: "e")` and `indexOf(vector: v, value: 3)` are both `indexOf`.
 
 | function | signature | what it does |
 | --- | --- | --- |
@@ -28,6 +32,11 @@ type.
 | `sort(values)` | `sort(T[]): T[dyn]` | in the element type's own order |
 | `sort(values, first)` | `sort(T[], func(T, T): Bool): T[dyn]` | in the order `first` gives |
 | `encode(value, codec)` | `encode(T, hive.codec.Codec<E>): Str` | `value` written in the format `codec` names |
+| `spawn(handler, state)` | `spawn(proc(mut S, M): M, S): Result<Address, hive.syslink.SyslinkError>` | starts a service |
+| `spawn(handler, state, name)` | `spawn(proc(mut S, M): M, S, Atom): Result<Address, hive.syslink.SyslinkError>` | starts one registered under `name` |
+| `at(name)` | `at(Atom): Address` | the service registered under `name` on this node |
+| `at(endpoint, name)` | `at(Str, Atom): Address` | the same service on the node at `endpoint` |
+| `kill(address)` | `kill(Address): void` | stops a service |
 
 `len` and `bytes` differ only for strings: for `"café"`, `len` is `4` (runes)
 while `bytes` is `5`.
@@ -71,6 +80,28 @@ arriving from outside cannot say what it should become
 ([14.7](14-stdlib.md#147-hivejson)). What a format cannot carry — a
 `hive.map.Map`, whose keys are whatever was put in it, or a `Table`, which has
 no names for its cells — is refused where the encoder is derived.
+
+## Services: `spawn`, `at`, `kill`
+
+A [service](14-stdlib.md#1410-hivesyslink) is started, named and stopped by
+these three, and reached by calling its `Address`.
+
+* **`spawn` takes either shape of handler**: `proc(mut S, M): M`, or
+  `proc(mut S, M, Address): M` for one handed its own address every turn. It is
+  the same call either way, and so is a window from
+  [`hive.ui.window`](14-stdlib.md#1415-hiveui).
+* **A name is optional, and registers the service as it starts.** The name is
+  an atom, and a name is one service's at a time on a node: a second `spawn`
+  under a name still held answers `Error` with reason `"Taken"`. A service with no
+  name has nothing to be refused, so its `spawn` is always `Ok`. A named service
+  answers with a **named address**, the only kind that survives the service being
+  restarted under the same name.
+* **`at` performs no I/O and cannot fail.** It is address construction rather
+  than a lookup, so a program may name a service that is not running yet — and a
+  request to one that is not there is what reports it.
+* **`kill` works on any address**, on this node or another. The service's
+  mailbox closes, its monitors are told, and its name is free again before any of
+  them hears about it. Killing one twice is harmless.
 
 ## A declaration of your own wins
 

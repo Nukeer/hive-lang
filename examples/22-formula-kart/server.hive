@@ -46,7 +46,7 @@
 //     a virtual thread of its own, and that thread does nothing but read.
 //   * **`hive.json`** is the wire, and the protocol is the type declaration in
 //     `lib/wire.hive`. There is no serialisation layer in this program.
-//   * **`hive.syslink` does the locking, so nothing else has to.** Every reader
+//   * **A service does the locking, so nothing else has to.** Every reader
 //     thread and the clock funnel into one service — `steward`, below — which
 //     handles one message at a time. The race is stepped, joined, driven and left
 //     one message at a time, and nothing in this file locks anything.
@@ -57,7 +57,6 @@ import ./lib/drive
 import ./lib/grid
 import ./lib/wire
 import hive.net
-import hive.syslink
 import hive.conv
 import hive.time
 import hive.term
@@ -105,7 +104,7 @@ type Driver {
 	who: Str
 	// How to reach them. An address is a value, so a way of talking to somebody is
 	// a field the way their name is.
-	post: hive.syslink.Address
+	post: Address
 	// The last thing they asked for. **Held rather than applied on arrival**: the
 	// race is stepped by the clock, and a client that sent its controls twice in
 	// one frame must not get two frames of throttle for it.
@@ -130,7 +129,7 @@ type World {
 // The steward's mailbox.
 type Note {
 	Tick { ms: Int }
-	Sit { who: Str, team: Str, post: hive.syslink.Address }
+	Sit { who: Str, team: Str, post: Address }
 	// The answer to `Sit`, which is the one thing anybody waits for.
 	Seated { seat: Int }
 	Nowhere
@@ -220,7 +219,7 @@ proc ticked(world: World, dt: Float): World {
 
 // Somebody sitting down. They asked for a garage; they get the first free seat in
 // it, or the first free seat anywhere, or the answer that there is not one.
-proc sitting(world: mut World, who: Str, team: Str, post: hive.syslink.Address): Note {
+proc sitting(world: mut World, who: Str, team: Str, post: Address): Note {
 	seat := freeSeat(world, team)
 	if seat < 0 {
 		async post(Post.Send(wire.told(wire.Down.Full())))
@@ -351,7 +350,7 @@ proc started(world: World): World {
 // those two makes the race a shade slower than real time. Nothing in the game can
 // tell; it is worth knowing that the number in the message is what this loop
 // *intends* rather than a clock reading.
-proc keeping(desk: hive.syslink.Address): void {
+proc keeping(desk: Address): void {
 	for ;; {
 		hive.task.sleep(16)
 		async desk(Note.Tick(16))
@@ -360,13 +359,18 @@ proc keeping(desk: hive.syslink.Address): void {
 
 // One client, one thread, and all it does is read. `wsServe` calls this once per
 // connection; when it returns, the connection closes.
-proc seated(desk: hive.syslink.Address, connection: hive.net.WsConnection): void {
+proc seated(desk: Address, connection: hive.net.WsConnection): void {
 	opening := hive.net.wsRequest(connection)
 	echo "a client connected to {opening.url}"
 
 	// The socket's own service. From here on this thread never writes to it: it
 	// hands lines to `post`, and posts hand them to the socket.
-	post := hive.syslink.spawn(posting, Link.Live(connection))
+	if spawn(posting, Link.Live(connection)) is Result.Ok(post) {
+		reading(desk, connection, post)
+	}
+}
+
+proc reading(desk: Address, connection: hive.net.WsConnection, post: Address): void {
 	mut Int seat = -1
 
 	for ;; {
@@ -459,7 +463,10 @@ proc main(): void {
 
 	mut Driver[dyn] nobody = []
 	world := World(control.lined(seed), nobody, 0.0, 0.0, port)
-	desk := hive.syslink.spawn(steward, world)
+	if spawn(steward, world, #Desk) is Result.Error(problem) {
+		panic problem
+	}
+	desk := at(#Desk)
 	async keeping(desk)
 
 	echo "{world.race.track.name} — {conv.round(world.race.track.length)} metres, {world.race.track.laps} laps, seed {seed}"

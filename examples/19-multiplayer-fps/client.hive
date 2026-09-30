@@ -91,9 +91,9 @@
 //     one `wsConnect`, one thread that does nothing but `wsReceive`, and a `wsSend`
 //     wherever there is something to say.
 //
-//   * `hive.syslink` is how the reading thread gets back in. **A window is a
-//     service**, so it has an address, and `ui.windowAddressed` hands it to
-//     `update`, which hands it to a background task. That is why there is no queue
+//   * A service is how the reading thread gets back in. **A window is a
+//     service**, so it has an address, and an `update` that takes one third is
+//     handed it, and hands it to a background task. That is why there is no queue
 //     in this program and no lock: the socket reader posts what it heard, and it
 //     arrives where the keyboard arrives, as one more variant.
 //
@@ -191,7 +191,7 @@ type Shot {
 
 // The window's mailbox. A key you pressed and a line the server said arrive at the
 // same handler and are told apart only by which variant they are — which is the claim
-// `hive.syslink` makes, holding as far as the keyboard.
+// a service makes, holding as far as the keyboard.
 type Msg {
 	// From the screen.
 	NameTyped { text: Str }
@@ -1415,7 +1415,7 @@ func joinedOf(_typed: Str): Msg {
 
 // The window's mailbox. A key, a mouse, a frame and the server all arrive here,
 // and there is one `is` chain for the lot.
-proc update(model: mut Model, msg: Msg, window: hive.syslink.Address): Msg {
+proc update(model: mut Model, msg: Msg, window: Address): Msg {
 	if msg is Msg.Tick(ms) {
 		model = ticked(model, ms)
 		return msg
@@ -1628,7 +1628,7 @@ proc say(model: Model, text: Str): Model {
 // *wait* for the answer: a screen that stopped drawing while it dialled is the one
 // thing a game may never do, so the reply arrives as a message like everything
 // else.
-proc joining(model: mut Model, window: hive.syslink.Address): void {
+proc joining(model: mut Model, window: Address): void {
 	if ready(model) == false {
 		return
 	}
@@ -1649,7 +1649,7 @@ proc joining(model: mut Model, window: hive.syslink.Address): void {
 // window — which is why there is no queue in this program and nothing is locked:
 // `async` at a service never blocks, and the window's handler is the only thing
 // that touches the model.
-proc listening(connection: hive.net.WsConnection, window: hive.syslink.Address): void {
+proc listening(connection: hive.net.WsConnection, window: Address): void {
 	for ;; {
 		heard := hive.net.wsReceive(connection)
 		if heard is Result.Error(problem) {
@@ -1776,8 +1776,8 @@ proc main(): void {
 	// program was first compiled and is inside the executable, so this runs with
 	// no network and nothing installed.
 	//
-	// The window *is* a service, and `ui.windowAddressed` hands `update` its
-	// address — which is what makes a background thread posting into it the
+	// The window *is* a service, started like any other, and `update` takes its
+	// address third — which is what makes a background thread posting into it the
 	// ordinary thing it is above.
-	ui.windowAddressed("Hive Arena", view, update, start(where))
+	spawn(ui.window("Hive Arena", view, update), start(where))
 }

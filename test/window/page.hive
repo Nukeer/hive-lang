@@ -68,5 +68,5 @@ func view(model: Model): ui.View {
 }
 
 proc main(): void {
-	ui.window("window test", view, update, Model(20, 3, 0, 10))
+	opened := spawn(ui.window("window test", view, update), Model(20, 3, 0, 10))
 }

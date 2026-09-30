@@ -41,6 +41,8 @@ type Ty {
 	// An opaque type the standard library owns: `hive.net.HttpRequest`,
 	// `hive.sql.SqlConnection`. Carried and compared by name.
 	TLib { module: Str, name: Str }
+	// `Address` — a service, which a call sends to.
+	TAddress
 	// A type variable, which is what makes a callable generic in it.
 	TVar { name: Str }
 	// No answer. Everything that produces one has already reported why.
@@ -224,7 +226,7 @@ func isVariable(t: Table, name: Str): Bool {
 
 func isBuiltinType(name: Str): Bool {
 	return name == "Str" || name == "Int" || name == "Float" || name == "Bool"
-		|| name == "Atom" || name == "Table" || name == "Result"
+		|| name == "Atom" || name == "Table" || name == "Result" || name == "Address"
 }
 
 // --- Resolving a written type ------------------------------------------------
@@ -270,6 +272,10 @@ func resolveBase(t: Table, pkg: Str, name: Str, args: ast.TypeExpr[]): Ty {
 	if pkg == "hive.codec" && name == "Codec" {
 		return Ty.TCodec(argAt(t, args, 0))
 	}
+	// The long name, which a program declaring its own `Address` still has.
+	if pkg == "hive" && name == "Address" {
+		return Ty.TAddress()
+	}
 	if text.startsWith(pkg, "hive.") {
 		return Ty.TLib(text.span(text.chars(pkg), 5, len(pkg) - 1), name)
 	}
@@ -291,6 +297,10 @@ func resolveBare(t: Table, name: Str, args: ast.TypeExpr[]): Ty {
 	}
 	if findType(t, name) is Result.Ok(_) {
 		return Ty.TNamed(name)
+	}
+	// After the declarations, which win over a builtin here as everywhere.
+	if name == "Address" {
+		return Ty.TAddress()
 	}
 	return Ty.TVar(name)
 }
@@ -319,6 +329,9 @@ func toWritten(ty: Ty): ast.TypeExpr {
 	if ty is Ty.TVar(name) { return named(name) }
 	if ty is Ty.TLib(module, name) {
 		return ast.TypeExpr.Named("hive." + module, name, [], [])
+	}
+	if ty is Ty.TAddress {
+		return ast.TypeExpr.Named("hive", "Address", [], [])
 	}
 	if ty is Ty.TVec(element, dim) {
 		return withDim(toWritten(element), dim)
@@ -385,6 +398,7 @@ func show(ty: Ty): Str {
 	else if ty is Ty.TVar(name) { return name }
 	else if ty is Ty.TNamed(name) { return shownName(name) }
 	else if ty is Ty.TLib(module, name) { return "hive.{module}.{name}" }
+	else if ty is Ty.TAddress { return "Address" }
 	else if ty is Ty.TVec(element, dim) { return show(element) + showDim(dim) }
 	else if ty is Ty.TResult(ok, bad) { return "Result<" + show(ok) + ", " + show(bad) + ">" }
 	else if ty is Ty.TMap(key, value) { return "hive.map.Map<" + show(key) + ", " + show(value) + ">" }
@@ -500,7 +514,7 @@ func accepts(to: Ty, from: Ty): Bool {
 			if toPure && fromPure == false {
 				return false
 			}
-			return sameTypes(toParams, fromParams) && sameMutexes(toMutexes, fromMutexes, len(toParams))
+			return paramsAccept(toParams, fromParams, toMutexes) && sameMutexes(toMutexes, fromMutexes, len(toParams))
 				&& accepts(toResult, fromResult)
 		}
 	}
@@ -539,6 +553,7 @@ func same(a: Ty, b: Ty): Bool {
 		if b is Ty.TLib(bModule, bName) { return aModule == bModule && aName == bName }
 		return false
 	}
+	if a is Ty.TAddress { return b is Ty.TAddress }
 	if a is Ty.TVec(aElement, aDim) {
 		if b is Ty.TVec(bElement, bDim) { return same(aElement, bElement) && sameDim(aDim, bDim) }
 		return false
@@ -639,20 +654,25 @@ func acceptsVector(toElement: Ty, toDim: ast.Dim, fromElement: Ty, fromDim: ast.
 		|| fromDim is ast.Dim.Any
 }
 
-func sameTypes(a: Ty[], b: Ty[]): Bool {
-	if len(a) != len(b) {
+// A function value is handed what the slot's parameters say, so each of its own
+// has to take that: `proc(Str[3])` cannot fill a `proc(Str[])` slot, whose calls
+// pass any length. A mutex position is written back through, so it is exact.
+func paramsAccept(slot: Ty[], given: Ty[], mutexes: Bool[]): Bool {
+	if len(slot) != len(given) {
 		return false
 	}
-	for i := 0; i < len(a); i++ {
-		// Written as two guards rather than one `&&`: two `bounds` in one
-		// condition repeat the `i >= 0` half, which `go vet` reads as a mistake.
-		if a bounds i {
-			if b bounds i {
-				if accepts(a[i], b[i]) == false {
+	mut i := 0
+	for each wanted in slot {
+		if given bounds i {
+			if mutexAt(mutexes, i) {
+				if same(wanted, given[i]) == false {
 					return false
 				}
+			} else if accepts(given[i], wanted) == false {
+				return false
 			}
 		}
+		i = i + 1
 	}
 	return true
 }
@@ -795,7 +815,7 @@ func orderedIn(t: Table, ty: Ty, enumerated: func(Str, Str): Bool, seen: Str[]):
 	if ty is Ty.TLib(module, name) {
 		return enumerated(module, name)
 	}
-	if ty is Ty.TFragment(_) || ty is Ty.TCodec(_) || ty is Ty.TVoid {
+	if ty is Ty.TFragment(_) || ty is Ty.TCodec(_) || ty is Ty.TVoid || ty is Ty.TAddress {
 		return false
 	}
 	if ty is Ty.TVec(element, _) {

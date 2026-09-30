@@ -22,8 +22,13 @@ main.hive:12: cannot prove this index is in range: the index is a computed
 A compile error is printed exactly as the compiler wrote it, with **nothing in
 front of it** — prefixing it with a program name would put something before the
 file name and break the pattern. Only a usage error (`hive build` with no
-entrypoint) says who is complaining, because it is not a diagnostic about
-anyone's source.
+entrypoint, a command that does not exist, a flag the command does not take)
+says who is complaining — `hive: ...` — because it is not a diagnostic about
+anyone's source. Either one exits non-zero.
+
+Every error goes to **standard error**, so `hive emit x.hive > main.go` never
+writes one into the Go. What a command was asked for — the Go, a test report,
+"No problems found" — goes to standard output.
 
 ## 17.2 Editor support
 
@@ -43,7 +48,7 @@ The two `%-G` items discard what is not a diagnostic: the first drops the
 indented continuation lines of a message that runs on, the last drops everything
 else.
 
-## 17.3 Two limits worth knowing
+## 17.3 A limit worth knowing
 
 **Errors from the passes after parsing land on a declaration.** Mutability,
 bounds, the proc/func split and the type checks all run on a flattened module
@@ -53,17 +58,15 @@ message opens with, and its name is what the message says. A pass holding no
 declaration at all reports against the file's first line, because `file:0:` is
 not somewhere to jump to.
 
-**In a program with imports, those same errors are reported against the
-entrypoint**, even when the declaration at fault came from an imported module —
-[flattening](12-modules.md#flattening) is what discards which file each
-declaration came from. The line is still the declaration's own, which is to say a
-line of a file the message does not name. Errors the lexer, parser and import
-resolver raise do name the right file and line, because those run per file.
+The declaration still says which file it came from, so an error inside an
+imported module names **that module's file**, and every name in the message is
+spelled the way the source spells it — `text.pad`, not the flattened
+`text_0_pad`. Errors the lexer, parser and import resolver raise name the right
+file and line too; an import that names no file is reported at the import.
 
-Both limits are consequences of one decision — that the passes after the loader
-see one flat program — and both would be lifted by carrying a position on every
-node. [18](18-conformance.md) records this as a known gap rather than a
-requirement.
+The limit is a consequence of one decision — that the passes after the loader see
+one flat program — and would be lifted by carrying a position on every node.
+[18](18-conformance.md) records this as a known gap rather than a requirement.
 
 ## 17.4 What a message should say
 
@@ -83,5 +86,5 @@ Not normative, but it is the standard the language's own messages are held to:
 ## 17.5 The one diagnostic that is not an error
 
 A test failure is an answer, not a malfunction, so the report goes to **stdout**
-and only a compiler or toolchain failure goes to stderr
+and only a compile error or a toolchain failure goes to stderr
 ([16](16-testing.md)).

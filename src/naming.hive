@@ -48,7 +48,7 @@ func fits(role: Role, name: Str): Bool {
 	// it wants nothing.
 	bare := unprefixed(name)
 	if role is Role.Variable {
-		return isCamel(bare) || isScreaming(bare)
+		return isCamel(bare) || isScreaming(bare) || name == "_"
 	} else if role is Role.Binding {
 		return isCamel(bare) || name == "_"
 	} else if role is Role.TypeName || role is Role.Variant || role is Role.Atom {

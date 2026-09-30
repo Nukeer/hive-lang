@@ -49,13 +49,13 @@ func goNameOf(module: Str, name: Str): Str {
 //
 // Most of it is read off `resultOf`, which answers `TUnknown` for a name its module
 // does not have. Four cannot be read that way — `task`, `map`, `json` and `crypto`
-// — so those are named in full.
+// — so those are named in full, as is `ui.window`, whose answer is its argument.
 func hasName(module: Str, name: Str): Bool {
 	if isLibType(module, name) {
 		return true
 	}
 	if module == "task" {
-		return name == "sleep"
+		return name == "sleep" || name == "sleepForever"
 	}
 	if module == "map" {
 		return name == "new" || name == "set" || name == "get" || name == "has"
@@ -72,6 +72,9 @@ func hasName(module: Str, name: Str): Bool {
 		if name == "run" {
 			return true
 		}
+	}
+	if module == "ui" && name == "window" {
+		return true
 	}
 	if resultOf(module, name, []) is types.Ty.TUnknown {
 		return false
@@ -101,7 +104,7 @@ func resultOf(module: Str, name: Str, args: types.Ty[]): types.Ty {
 	if module == "net" { return netResult(name) }
 	if module == "sql" { return sqlResult(name, args) }
 	if module == "syslink" { return syslinkResult(name) }
-	if module == "ui" { return uiResult(name) }
+	if module == "ui" { return uiResult(name, args) }
 	return types.Ty.TUnknown()
 }
 
@@ -351,17 +354,9 @@ func codecFormats(): Str[dyn] {
 	return ["json", "jwt", "query", "term"]
 }
 
-// A service is reached by calling its address, so most of this module is about
-// getting one: `spawn` starts a service, `at` and `on` name one that already
-// exists, `register` publishes it. The three that build an address do no I/O.
 func syslinkResult(name: Str): types.Ty {
-	address := types.Ty.TLib("syslink", "Address")
 	syslinkError := types.Ty.TLib("syslink", "SyslinkError")
-	if name == "spawn" || name == "spawnAddressed" || name == "at" || name == "on" {
-		return address
-	}
-	if name == "register" { return types.Ty.TResult(address, syslinkError) }
-	if name == "stop" || name == "monitor" {
+	if name == "monitor" {
 		return types.Ty.TVoid()
 	}
 	if name == "listen" {
@@ -496,9 +491,6 @@ func isOpaque(module: Str, name: Str): Bool {
 	}
 	if module == "sql" {
 		return name == "SqlConnection"
-	}
-	if module == "syslink" {
-		return name == "Address"
 	}
 	// A view, an attribute, a shape, and the enumerations. Registering them is
 	// what lets a `func` answering with a `hive.ui.View` be written down.
@@ -797,15 +789,16 @@ func isUiScene(name: Str): Bool {
 		|| name == "onPad" || name == "onSize"
 }
 
-func uiResult(name: Str): types.Ty {
+func uiResult(name: Str, args: types.Ty[]): types.Ty {
 	if isUiWidget(name) { return types.Ty.TLib("ui", "View") }
 	if isUiShape(name) { return types.Ty.TLib("ui", "Shape") }
 	if isUiMark(name) { return types.Ty.TLib("ui", "Mark") }
 	if isUiAttr(name) { return types.Ty.TLib("ui", "Attr") }
 	if name == "html" || name == "page" { return types.Ty.TStr() }
-	// A window does not return: it shows the view and folds events until the
-	// program ends.
-	if name == "window" || name == "windowAddressed" { return types.Ty.TVoid() }
+	// A window is a `spawn` handler of the same shape as its `update`.
+	if name == "window" && args bounds 2 {
+		return args[2]
+	}
 	return types.Ty.TUnknown()
 }
 
@@ -872,8 +865,8 @@ func uiParams(name: Str): types.Ty[dyn] {
 	}
 	if name == "html" { return [view] }
 	if name == "page" { return [str, view] }
-	if name == "window" || name == "windowAddressed" {
-		return [str, types.Ty.TUnknown(), types.Ty.TUnknown(), types.Ty.TUnknown()]
+	if name == "window" {
+		return [str, types.Ty.TUnknown(), types.Ty.TUnknown()]
 	}
 	// An event takes the message itself, or a function to one. What its handler
 	// is *handed* when it fires is `uiEventArgs`, which is a different question.
@@ -987,7 +980,10 @@ func paramsOf(module: Str, name: Str): types.Ty[dyn] {
 	}
 	if module == "math" { return mathParams(name) }
 	if module == "env" { return [types.Ty.TStr()] }
-	if module == "task" { return [types.Ty.TInt()] }
+	if module == "task" {
+		if name == "sleepForever" { return [] }
+		return [types.Ty.TInt()]
+	}
 	if module == "time" { return timeParams(name) }
 	if module == "json" { return [] }
 	if module == "map" { return mapParams(name) }
@@ -1003,6 +999,148 @@ func paramsOf(module: Str, name: Str): types.Ty[dyn] {
 		return [types.Ty.TStr()]
 	}
 	return []
+}
+
+// What each position of `hive.<module>.<name>` is called, for a call that names
+// its arguments: one name for every type `paramsOf` gives, in the same order, and
+// the names spec 14 writes each call with.
+func paramNamesOf(module: Str, name: Str): Str[dyn] {
+	if module == "term" {
+		if name == "print" || name == "status" { return ["text"] }
+		if name == "exec" || name == "attach" { return ["command", "arguments", "directory"] }
+		if name == "execWith" { return ["command", "arguments", "directory", "environment"] }
+		if name == "exit" { return ["code"] }
+		return []
+	}
+	if module == "file" {
+		if name == "write" || name == "append" || name == "writeSecret" { return ["path", "contents"] }
+		if name == "copy" || name == "move" { return ["from", "to"] }
+		if name == "csv" { return ["path", "separator"] }
+		return ["path"]
+	}
+	if module == "conv" {
+		if name == "sti" || name == "stf" { return ["text"] }
+		return ["v"]
+	}
+	if module == "math" {
+		if name == "pi" { return [] }
+		if name == "clamp" { return ["value", "low", "high"] }
+		if name == "atan2" { return ["y", "x"] }
+		if name == "hypot" { return ["x", "y"] }
+		if name == "min" || name == "max" { return ["a", "b"] }
+		return ["x"]
+	}
+	if module == "env" { return ["name"] }
+	if module == "task" {
+		if name == "sleepForever" { return [] }
+		return ["ms"]
+	}
+	if module == "time" {
+		if name == "format" { return ["time", "template"] }
+		if name == "dateFrom" { return ["year", "month", "day"] }
+		if name == "dateTimeFrom" { return ["year", "month", "day", "hour", "minute", "second"] }
+		return []
+	}
+	if module == "map" {
+		if name == "new" { return [] }
+		if name == "set" { return ["m", "key", "value"] }
+		if name == "get" || name == "has" || name == "delete" { return ["m", "key"] }
+		if name == "fromTable" { return ["t"] }
+		return ["m"]
+	}
+	if module == "ui" { return uiParamNames(name) }
+	if module == "syslink" {
+		if name == "listen" { return ["endpoint"] }
+		if name == "monitor" { return ["watcher", "target", "notice"] }
+		return []
+	}
+	if module == "sql" {
+		if name == "connect" { return ["driver", "connString"] }
+		if name == "pool" { return ["driver", "connString", "maxOpen", "maxIdle"] }
+		if name == "raw" { return ["connection", "text"] }
+		if name == "run" { return ["connection", "query"] }
+		return ["connection"]
+	}
+	if module == "net" {
+		if name == "httpRequest" { return ["request"] }
+		if name == "httpServe" || name == "wsServe" || name == "socketServe" { return ["port", "handler"] }
+		if name == "wsConnect" { return ["url"] }
+		if name == "resolve" { return ["name"] }
+		if name == "urlEncode" { return ["text"] }
+		if name == "socketConnect" { return ["host", "port"] }
+		if name == "wsSend" { return ["conn", "message"] }
+		if name == "socketSend" { return ["conn", "data"] }
+		if name == "socketReceive" { return ["conn", "bytes"] }
+		if name == "localAddress" { return [] }
+		return ["conn"]
+	}
+	if module == "crypto" {
+		if name == "randomHex" { return ["bytes"] }
+		if name == "hmacSha256" { return ["input", "key"] }
+		if name == "encrypt" { return ["plaintext", "password"] }
+		if name == "decrypt" { return ["ciphertext", "password"] }
+		if name == "jwtCodec" { return ["secret"] }
+		if name == "jwtDecode" || name == "jwtHeader" { return ["token"] }
+		return ["input"]
+	}
+	return []
+}
+
+func uiParamNames(name: Str): Str[dyn] {
+	if name == "row" || name == "column" || name == "inset" { return ["attrs", "views"] }
+	if name == "overlay" { return ["attrs", "child"] }
+	if name == "text" { return ["attrs", "content"] }
+	if name == "button" { return ["attrs", "label"] }
+	if name == "input" || name == "textarea" { return ["attrs", "value"] }
+	if name == "image" { return ["attrs", "src", "alt"] }
+	if name == "link" { return ["attrs", "href", "label"] }
+	if name == "icon" { return ["attrs", "name"] }
+	if name == "checkbox" { return ["attrs", "label", "checked"] }
+	if name == "select" { return ["attrs", "options", "chosen"] }
+	if name == "table" { return ["attrs", "rows"] }
+	if name == "scene" { return ["attrs", "shapes"] }
+	if name == "canvas" { return ["attrs", "marks"] }
+	if name == "spinner" { return ["attrs"] }
+	if name == "spacer" || name == "none" { return [] }
+	if name == "dot" { return ["attrs", "x", "y", "radius"] }
+	if name == "bar" { return ["attrs", "x", "y", "width", "height"] }
+	if name == "path" || name == "patch" { return ["attrs", "points"] }
+	if name == "words" { return ["attrs", "x", "y", "height", "text"] }
+	if name == "box" { return ["attrs", "width", "height", "depth"] }
+	if name == "cone" { return ["attrs", "top", "bottom", "height"] }
+	if name == "roof" { return ["attrs", "wide", "tall", "long"] }
+	if name == "ground" { return ["attrs", "width", "depth"] }
+	if name == "cylinder" { return ["attrs", "radius", "height"] }
+	if name == "sphere" { return ["attrs", "radius"] }
+	if name == "label" { return ["attrs", "words"] }
+	if name == "sprite" { return ["attrs", "image", "wide", "tall"] }
+	if name == "sound" { return ["attrs", "name"] }
+	if name == "line" { return ["attrs", "fromX", "fromY", "fromZ", "toX", "toY", "toZ"] }
+	if name == "html" { return ["view"] }
+	if name == "page" { return ["title", "view"] }
+	if name == "window" { return ["title", "view", "update"] }
+	if isUiEvent(name) {
+		if len(uiEventArgs(name)) == 0 { return ["message"] }
+		return ["f"]
+	}
+	if name == "at" || name == "turn" || name == "eye" { return ["x", "y", "z"] }
+	if name == "aim" { return ["yaw", "pitch"] }
+	if name == "region" { return ["x", "y", "width", "height"] }
+	if isUiAttr(name) { return ["value"] }
+	return []
+}
+
+// A library call's arguments in parameter order, however they were written. A
+// record of the library's own is built by its fields instead, and stays as it is.
+func libraryArgs(module: Str, name: Str, args: ast.Arg[]): ast.Arg[dyn] {
+	if len(fieldsOf(module, name)) > 0 {
+		mut ast.Arg[dyn] out = []
+		for each a in args {
+			append(out, a)
+		}
+		return out
+	}
+	return ast.positional(args, paramNamesOf(module, name))
 }
 
 // Every one takes and answers with a `Float`; what differs is how many.
@@ -1040,16 +1178,9 @@ func mapParams(name: Str): types.Ty[dyn] {
 }
 
 func syslinkParams(name: Str): types.Ty[dyn] {
-	address := types.Ty.TLib("syslink", "Address")
-	any := types.Ty.TUnknown()
-	// A service name is an atom, which lets the compiler know the registry.
-	if name == "at" { return [types.Ty.TAtom()] }
-	if name == "on" { return [types.Ty.TStr(), types.Ty.TAtom()] }
-	if name == "register" { return [types.Ty.TAtom(), address] }
-	if name == "stop" { return [address] }
+	address := types.Ty.TAddress()
 	if name == "listen" { return [types.Ty.TStr()] }
-	if name == "spawn" || name == "spawnAddressed" { return [any, any] }
-	if name == "monitor" { return [address, address, any] }
+	if name == "monitor" { return [address, address, types.Ty.TUnknown()] }
 	// `node` and `peers` ask for nothing.
 	return []
 }

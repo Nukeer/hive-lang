@@ -19,6 +19,7 @@ import ./fetch
 import ./loader
 import ./paths
 import ./progress
+import ./project
 import ./text
 import ./version
 import hive.conv
@@ -60,11 +61,13 @@ proc write(entry: Str, from: Int): Result<Str, diag.Diagnostic[dyn]> {
 	if reachable(inside) == false {
 		return Result.Error([diag.about(entry, outside(entry))])
 	}
-	progress.step(from, "reading {entry}")
-	program := loader.load(entry)
-	if len(program.errors) > 0 {
-		return Result.Error(program.errors)
+	// An image is only as good as the build inside it, so the program is held to
+	// what `hive check` holds it to before anything is written.
+	found := project.check(entry, from)
+	if len(found) > 0 {
+		return Result.Error(found)
 	}
+	program := loader.load(entry)
 	needs := needsOf(program)
 	path := fileName()
 	progress.step(from, "writing {path}")
@@ -258,9 +261,9 @@ proc serving(found: mut Found, callee: ast.Expr, args: ast.Arg[]): void {
 	name := libCall(callee)
 	if name == "hive.net.httpServe" || name == "hive.net.wsServe"
 		|| name == "hive.net.socketServe" {
-		append(found.served, Served(name, literalPort(args)))
+		append(found.served, Served(name, literalPort(ast.positional(args, ["port", "handler"]))))
 	} else if name == "hive.syslink.listen" {
-		append(found.served, Served(name, addressPort(args)))
+		append(found.served, Served(name, addressPort(ast.positional(args, ["endpoint"]))))
 	} else if text.startsWith(name, "hive.sql.") {
 		found.database = true
 	}
@@ -357,7 +360,8 @@ func header(entry: Str, needs: Needs): Str {
 		#
 	`)
 	append(out, "# Written by ~BT~hive container {entry}~BT~, and an ordinary Dockerfile from there")
-	append(out, "# on: editing it is expected, and running the command again writes it afresh.")
+	append(out, "# on: editing it is expected. Running the command again leaves a Dockerfile")
+	append(out, "# alone, and writes Dockerfile-hive-container beside it.")
 	return join(out, "\n")
 }
 
@@ -524,21 +528,15 @@ func exposed(needs: Needs): Str {
 		}
 		return join(out, "\n")
 	}
-	if needs.serves {
-		append(out, `
-			# This program starts a server, but nothing in it says on which port: every
-			# one it starts is handed a port worked out while it runs — from a variable,
-			# or out of the environment. So 8080 is the usual default rather than
-			# anything read off the program: change it to whatever this one listens on.
-		`)
-	} else {
-		append(out, `
-			# Nothing in this program opens a port, so this is a default rather than an
-			# observation: 8080 is here because a container usually wants one. Change it
-			# to whatever this program comes to listen on, or drop the line — a program
-			# that listens on nothing has no use for it.
-		`)
+	if needs.serves == false {
+		return "# Nothing in this program opens a port, so nothing is exposed."
 	}
+	append(out, `
+		# This program starts a server, but nothing in it says on which port: every
+		# one it starts is handed a port worked out while it runs — from a variable,
+		# or out of the environment. So 8080 is the usual default rather than
+		# anything read off the program: change it to whatever this one listens on.
+	`)
 	append(out, "EXPOSE 8080")
 	return join(out, "\n")
 }

@@ -68,12 +68,12 @@ Because the promise is kept everywhere, it is never lost: `v[2]` stays legal
 after the reassignment, and a `Str[3]` parameter can be indexed inside the callee
 without a guard, since every call site was checked.
 
-### A promise restricts a callable as a value
+### A promise travels with a callable as a value
 
-Keeping a promise means keeping it at every call site, so a callable with a
-statically-sized parameter is restricted as a value. It may be bound to an
-**immutable name** — a bare reference or a partial application — and called
-through it, and those calls are checked exactly as direct ones are:
+Keeping a promise means keeping it at every call site, and a function type spells
+the length: `f := takes` is a `proc(Str[3]): void`, and every call through it —
+or through a parameter, a field or a vector holding it — is checked exactly as a
+direct one is:
 
 ```hive
 proc takes(v: Str[3]): void { echo v[2] }
@@ -83,25 +83,27 @@ f(["a", "b", "c"])               // fine
 f(["a"])                         // compile error: `f` holds a `Str[3]` taker
 ```
 
-It may **not** be handed on any further — passed as an argument, returned, stored
-in a vector or a field — because the eventual call would happen somewhere with no
-idea what was promised. The same reason rules out a `mut` holder, which could be
-pointed at a different callable after the fact.
-
-Declaring the parameter `Str[dyn]` or `Str[]` lifts every one of these
-restrictions, at the cost of guarding the index inside the callee.
+So it fills only a slot that promises as much. A `proc(Str[]): void` or
+`proc(Str[dyn]): void` parameter would be called with a vector of any length,
+which `takes` cannot take, so handing it one is a compile error. The other way
+round is safe: a callable taking `Str[]` fills a `proc(Str[3]): void` slot, since
+three is a length it takes.
 
 ## 10.4 An inferred length is weaker
 
-Nothing constrains what comes next, so an inferred length survives a write
-*through* the name and dies the moment the name is rebound — including in a
-branch or loop body that may not even run:
+An inferred length is still the vector's length — `mut v := ["a", "b", "c"]` is
+rebound only to another three, and never grows, since only a vector declared
+`[dyn]` does. What is weaker is what the bounds pass keeps: a proof from an
+inferred length survives a write *through* the name and dies the moment the name
+is rebound — including in a branch or loop body that may not even run — where a
+declared length ([10.3](#103-a-declared-length-is-a-promise)) proves every index
+below it for as long as the name exists:
 
 ```hive
 mut v := ["a", "b", "c"]
-v[0] = "x"                  // still three
-if changed { v = ["x"] }
-echo v[2]                   // compile error: v's length is no longer known
+v[0] = "x"                        // still three, and still proved
+if changed { v = ["x", "y", "z"] }
+echo v[2]                         // compile error: v was rebound, so guard it
 ```
 
 The same applies to a field: replacing it costs whatever had been proven about

@@ -16,8 +16,8 @@ program is rejected rather than deferred to run time.
 | `void` | nothing; a return type only | — |
 
 `Int` is exactly Go's `int`, which is 64-bit on every platform Hive targets.
-Its overflow **wraps**, silently and by design
-([05](05-expressions.md#57-arithmetic-at-the-edges)).
+It never wraps: arithmetic that would pass its largest or smallest value stays
+at that value ([05](05-expressions.md#57-arithmetic-at-the-edges)).
 
 `void` is not a value type. It may be written as a return type and nowhere
 else: there is no `void` variable, no `void` field, and no `void` element.
@@ -158,7 +158,8 @@ type Shape {                // a tagged union
 }
 ```
 
-A field declared **outside any variant** is added to every variant:
+A field declared **outside any variant** is added to every variant, after the
+variant's own fields — `Event.Opened("ada", 3)` is `by` and then `at`:
 
 ```hive
 type Event {
@@ -179,7 +180,10 @@ a value of it. `Shape.Circle(_)` is the spelling that is a function value
 
 A union value is narrowed with `is` ([07](07-patterns.md)). There is no other
 way to reach a variant's fields: a value typed as the union has only the fields
-every variant shares.
+declared outside every variant, which it reads straight off the value
+(`event.at`). A field each variant declares for itself, even under one name in
+all of them, still belongs to the variants. Nor is a union value assigned into:
+it is built whole, so `event.at = 4` is a compile error.
 
 **Recursion.** A type may reach back into itself through a variant, which is
 what an expression tree needs:
@@ -281,3 +285,18 @@ not a type of its own: `Shape.Circle` is a way of building and matching a
 A **declared static length is a promise**, so a `Str[3]` slot only ever takes a
 vector of exactly three, wherever the value came from, and a length the compiler
 cannot see is rejected ([10](10-bounds.md#103-a-declared-length-is-a-promise)).
+
+## 3.10 `Address`
+
+A [service](14-stdlib.md#1410-hivesyslink), in this process or on another
+machine. It is what [`spawn` and `at`](13-builtins.md#services-spawn-at-kill)
+answer with, and it is **called**: `box(message)` sends to the service and waits
+for its answer ([09](09-concurrency.md)).
+
+An address is an ordinary value — stored in a field, passed as a parameter,
+carried inside a message — and it has no order, so `sort` refuses one. It is one
+type rather than one per protocol: what a send answers with is the type of the
+message sent, since a service answers with one of its own.
+
+A program that declares its own `Address` has that one under the bare name, and
+the builtin is still there as `hive.Address`.

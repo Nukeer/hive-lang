@@ -125,6 +125,9 @@ proc grow(vec: mut Str[dyn], tag: Str): void {
 
 A `proc` may do everything a `func` may, plus declare mutex parameters. Programs
 start at `proc main(): void`, in the file handed to `hive build` / `hive run`.
+Nothing calls `main` with arguments or reads what it answers, so any other
+signature is a compile error: the command line is `hive.term.args()`, and an exit
+status is `hive.term.exit(code)`.
 
 ## 4.4 Returning on every path
 
@@ -132,11 +135,13 @@ Every non-`void` `proc` and `func` must **return on every path**. A path
 terminates by ending in:
 
 * `return`;
-* `assert` or `panic` — both handy for a tail you know is unreachable;
+* `panic`, or a call to `hive.term.exit` — both handy for a tail you know is
+  unreachable;
 * an `if`/`else` whose every branch terminates; or
 * an else-less `if`/`else if` chain that covers its subject's whole type — a
   `Result`'s `Ok` and `Error`, or every variant of a declared union.
 
+An `assert` does not terminate a path: one that holds carries on past it.
 Anything else is a compile error. The last case is what lets a total function
 over a union be written without a dead `else`:
 
@@ -180,6 +185,7 @@ query deleteUser(id: Int): void {  // a statement reports what it touched
 | --- | --- | --- |
 | `Row[dyn]` (a declared type) | `Fragment<Row[dyn]>` | `Result<Row[dyn], hive.sql.SqlError>` |
 | `Str[dyn]`, `Int[dyn]`, … | `Fragment<Str[dyn]>` | that column, as a vector |
+| `Table` | `Fragment<Table>` | `Result<Table, hive.sql.SqlError>` — a header row of column names, then every row as text |
 | `void` | `Fragment<void>` | `Result<Int, hive.sql.SqlError>` — the rows it affected |
 
 Because a fragment is a value, it can be bound, passed and held like any other:
@@ -197,6 +203,9 @@ Rules the compiler enforces:
 * **Columns match fields by name**, so reordering the `SELECT` cannot silently
   remap them. A column whose name differs from its field needs an alias
   (`SELECT u.name AS author`). A row type holds scalars only.
+* **A `Table` takes whatever comes back**, so it is the one result `SELECT *`
+  fills: there are no fields for the columns to disagree with. Any other vector of
+  vectors is a compile error.
 * **`SELECT *` against a declared row type is a compile error.** It says neither
   how many columns come back nor what they are called, and what it stands for
   changes the day somebody adds a column. The rule is about the *result*, so
