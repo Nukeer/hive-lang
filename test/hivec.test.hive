@@ -84,6 +84,27 @@ test "a bad flag beside a good one still refuses the build" {
 	assert asked.error != ""
 }
 
+// What `go test -coverprofile` writes for the runtime package, which has no
+// tests, came out as a blank line under the last failure.
+test "a failure's output is what the test printed, and nothing go test said" {
+	run := "=== RUN   TestHive/fails\nshown\n    main_test.go:9: assert x\n--- FAIL: TestHive/fails (0.00s)\nFAIL\ncoverage: 70.0% of statements\nFAIL\thiveapp\t1.4s\n\thiveapp/hive\t\tcoverage: 0.0% of statements\nFAIL\n"
+	details := testreport.detailFor(testreport.collectDetails(run), "fails")
+	assert len(details) == 2
+	if details bounds 1 {
+		assert details[0] == "shown"
+		assert details[1] == "main_test.go:9: assert x"
+	}
+}
+
+test "a line a test printed keeps the tabs in it" {
+	run := "=== RUN   TestHive/tabs\na\tb\n--- FAIL: TestHive/tabs (0.00s)\n"
+	details := testreport.detailFor(testreport.collectDetails(run), "tabs")
+	assert len(details) == 1
+	for each d in details {
+		assert d == "a\tb"
+	}
+}
+
 test "coverage names an imported declaration the way its module spells it" {
 	assert testreport.readable("text_0_pad") == "text.pad"
 	assert testreport.readable("main") == "main"
