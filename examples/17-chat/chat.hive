@@ -597,10 +597,10 @@ proc main(): void {
 	}
 	echo "listening on {mine}"
 
-	// Opens a real application window on Linux and on Windows: an installed
-	// Chrome or Edge in app mode, and an ordinary tab where there is none.
-	// Nothing is linked in for it, so this still builds offline into one
-	// executable with no dependencies.
+	// Opens a real application window: on Windows and Linux one the program draws
+	// itself, and elsewhere an installed Chrome or Edge in app mode, or an ordinary
+	// tab where there is none. Either way this builds offline into one executable
+	// with no dependencies.
 	opened := spawn(ui.window("Hive Chat — {mine}", view, update), fresh(mine, facing(mine)), #Chat)
 	if opened is Result.Error(problem) {
 		panic problem

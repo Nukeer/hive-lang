@@ -1558,8 +1558,8 @@ proc checkLibraryArguments(c: mut Check, env: infer.Env, module: Str, name: Str,
 	if module == "sql" && name == "run" {
 		checkRunsQuery(c, env, args)
 	}
-	if module == "ui" && name == "window" && len(args) == 3 {
-		checkWindow(c, env, ast.argFor(args, "", 1), ast.argFor(args, "", 2))
+	if module == "ui" && (name == "window" || name == "webview") && len(args) == 3 {
+		checkWindow(c, env, name, ast.argFor(args, "", 1), ast.argFor(args, "", 2))
 	}
 	if stdlib.signatureOf(module, name) is Result.Ok(wanted) {
 		if len(args) != len(wanted) {
@@ -1652,8 +1652,8 @@ proc checkHandler(c: mut Check, env: infer.Env, starts: Str, handler: ast.Expr):
 	return false
 }
 
-proc checkWindow(c: mut Check, env: infer.Env, view: ast.Expr, update: ast.Expr): void {
-	if checkHandler(c, env, "`hive.ui.window`", update) == false {
+proc checkWindow(c: mut Check, env: infer.Env, name: Str, view: ast.Expr, update: ast.Expr): void {
+	if checkHandler(c, env, "`hive.ui.{name}`", update) == false {
 		return
 	}
 	mut state := types.Ty.TUnknown()
@@ -1661,7 +1661,7 @@ proc checkWindow(c: mut Check, env: infer.Env, view: ast.Expr, update: ast.Expr)
 		state = infer.typeAt(params, 0)
 	}
 	fits(c, types.Ty.TFn(true, [state], [false], types.Ty.TLib("ui", "View")), infer.typeOf(env, view),
-		"the view `hive.ui.window` draws the state with")
+		"the view `hive.ui.{name}` draws the state with")
 }
 
 // `hive.sql.run` is the one library call whose second argument has a shape

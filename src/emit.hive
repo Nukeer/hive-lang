@@ -42,7 +42,7 @@ type Emitted {
 	// own file in the same Go package, so this keeps a codec a test needs from
 	// being written twice — or, where only a test needed it, from being missed.
 	codecs: Str[dyn]
-	// Whether the program opens a `hive.ui.window`. A windowed program is linked
+	// Whether the program opens a `hive.ui.window` or `webview`. A windowed program is linked
 	// without a console, which is what makes it one window rather than two — and
 	// `hive.ui.html` alone is not that, so the module list cannot answer it.
 	window: Bool
@@ -4476,10 +4476,16 @@ proc libraryCall(em: mut Emit, env: infer.Env, module: Str, name: Str, written: 
 		if stdlib.isUiEvent(name) {
 			return uiEvent(em, env, name, args)
 		}
-		if name == "window" {
+		if name == "window" || name == "webview" {
 			em.window = true
+			mut opens := "UiWebview"
+			// No file of its own: what it marks is a program that may draw a window itself.
+			if name == "window" {
+				opens = "UiWindow"
+				useModule(em, "uinative")
+			}
 			update := argExpr(args, 2)
-			return "hive." + addressedName("UiWindow", env, update) + "(" + expr(em, env, argExpr(args, 0), types.Ty.TStr()) + ", "
+			return "hive." + addressedName(opens, env, update) + "(" + expr(em, env, argExpr(args, 0), types.Ty.TStr()) + ", "
 				+ expr(em, env, argExpr(args, 1), types.Ty.TUnknown()) + ", "
 				+ expr(em, env, update, types.Ty.TUnknown()) + ")"
 		}

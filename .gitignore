@@ -76,6 +76,8 @@ examples/*/*
 # A module of an example's own, and the one Go file an example imports.
 !examples/*/lib/
 !examples/*/*.go
+# The picture 23 shows.
+!examples/23-every-widget/assets/
 # What an example writes for itself — a database, an encrypted vault — is
 # generated, and so is the lock file a remote import would leave.
 examples/*/*.db

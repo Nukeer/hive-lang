@@ -234,9 +234,13 @@ test "a window is a handler for spawn, and its view reads the state its update w
 	assert problemCount(msg + loud + view + inMain("w := spawn(hive.ui.window(\"T\", view, up), 0, #Main)")) == 0
 	assert opens(problem(msg + up + view + inMain("hive.ui.window(\"T\", view, up, 0)")),
 		"in `main`: `hive.ui.window` takes 3 arguments, and this call passes 4")
+	assert problemCount(msg + up + view + inMain("w := spawn(hive.ui.webview(\"T\", view, up), 0)")) == 0
+	assert problemCount(msg + loud + view + inMain("w := spawn(hive.ui.webview(\"T\", view, up), 0)")) == 0
 	other := "func view(s: Str): hive.ui.View \{ return hive.ui.text([], s) }\n"
 	assert opens(problem(msg + up + other + inMain("w := spawn(hive.ui.window(\"T\", view, up), 0)")),
 		"in `main`: the view `hive.ui.window` draws the state with wants func(Int): hive.ui.View")
+	assert opens(problem(msg + up + other + inMain("w := spawn(hive.ui.webview(\"T\", view, up), 0)")),
+		"in `main`: the view `hive.ui.webview` draws the state with wants func(Int): hive.ui.View")
 	plain := "proc up(n: Int, m: Msg): Msg \{ return m }\n"
 	assert opens(problem(msg + plain + view + inMain("w := spawn(hive.ui.window(\"T\", view, up), 0)")),
 		"in `main`: a handler writes its state in place")

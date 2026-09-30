@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.11
+
+### Standard library
+
+* **On Windows and Linux the program draws a `hive.ui.window` itself**, with no browser. Every widget but `scene` and `inset` has a version of its own — every kind of `input`, `textarea`, `checkbox`, `select` with its list, `table` with its sticky header, `canvas`, `image`, `spinner`, dialogs and pinned overlays, and a `hint` as a tooltip — laid out by the stylesheet's own rules, light or dark as the desktop is, scaled for the display, and still built with no C compiler. Windows sets its text in Segoe UI; Linux speaks X11 (XWayland on a Wayland desktop) and reads the system's own fonts itself — TrueType, CFF and variable ones, bold from a variable font's own weight axis. A window with a scene, a program shipping `assets/font.woff2`, `HIVE_WINDOW=print`, a Linux machine with no display or no usable font, macOS and Android keep the page. The layout is modelled on [Clay](https://github.com/nicbarker/clay) by Nic Barker.
+* **Such a window does what a desktop window does.** Text is selected with the pointer and copied; a double click takes a word and a triple click a paragraph; a right click or the Menu key opens a menu of what can be done there — Undo, Redo, Cut, Copy, Paste, Delete and Select all in a field, Copy on selected text, Open and Copy on a link. A field undoes a run of typing at a time, a scroll bar can be dragged and its track clicked, a textarea is resized from its corner, an `image` may be PNG, JPEG, GIF, WebP or SVG, and a moving GIF or WebP moves.
+* **Screen readers read it and input methods type into it.** Windows answers UI Automation, which Narrator, NVDA and JAWS read; Linux answers AT-SPI, which Orca reads: every widget with its role, name, value and state, what it can do, and the focus as it moves. On Linux, IBus or Fcitx5 types into a field where one is running, so Chinese, Japanese and Korean can be written, and a keyboard's dead keys compose where none is.
+* **`hive.ui.webview(title, view, update)`** is a `window` that is always a page, on every platform, and takes and answers with exactly what `window` does. A program that opens only webviews carries none of the code that draws a window itself.
+
+### Examples
+
+* **`23-every-widget`**: every `hive.ui` widget but the 3D ones, with every attribute and event among them, in one window.
+
 ## v0.2.10
 
 ### Language

@@ -22,6 +22,7 @@ import ./ranges
 import ./runtime
 import ./shim
 import ./text
+import ./uinative
 import ./vendor
 import hive.file
 import hive.map
@@ -199,6 +200,7 @@ proc build(entry: Str, withTests: Bool, from: Int): Written {
 	// A module the program never referenced is never written, so it is never
 	// compiled and never linked.
 	mut drawsAScene := false
+	mut drawsItself := false
 	for each module in modules {
 		source := runtime.moduleSource(module)
 		if source != "" {
@@ -206,6 +208,16 @@ proc build(entry: Str, withTests: Bool, from: Int): Written {
 		}
 		if module == "uiscene" {
 			drawsAScene = true
+		}
+		if module == "uinative" {
+			drawsItself = true
+		}
+	}
+	// A typeface of the program's own is one only the page can set.
+	font := paths.joinPath(paths.joinPath(paths.dirOf(entry), "assets"), "font.woff2")
+	if drawsItself && drawsAScene == false && hive.file.exists(font) == false {
+		for each source in uinative.sources() {
+			put(directory + "/hive", source.file, source.text + "\n", written, errors)
 		}
 	}
 	// A windowed program's own icon, embedded so the window can link it. Written

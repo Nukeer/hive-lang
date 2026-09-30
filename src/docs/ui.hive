@@ -36,6 +36,7 @@ func ui(): Str {
 		| call | what it does |
 		| --- | --- |
 		| ~BT~window(title, view, update)~BT~ | a window, as a handler for ~BT~spawn~BT~ — which opens it |
+		| ~BT~webview(title, view, update)~BT~ | the same window, always drawn as a page |
 		| ~BT~html(view)~BT~ | renders the tree as an HTML **fragment** → ~BT~Str~BT~ |
 		| ~BT~page(title, view)~BT~ | renders it as a whole **document** → ~BT~Str~BT~ |
 
@@ -57,11 +58,26 @@ func ui(): Str {
 
 		## What a window is
 
-		An **application-mode browser window** — no address bar and no tabs — running
+		On Windows and Linux, **one the program draws itself** — see below. Elsewhere, an
+		**application-mode browser window** — no address bar and no tabs — running
 		against a **profile of its own**, so it is its own process rather than a window
 		inside somebody's browser: none of your own session, extensions or history is in
 		it, and quitting a browser does not close it. A machine with no Chromium-family
 		browser falls back to an ordinary tab.
+
+		**On Windows and Linux the program draws its window itself**, with no browser
+		anywhere: every widget but a ~BT~scene~BT~ has a version of its own there, laid out
+		by the stylesheet's own rules and light or dark as the desktop is. Linux speaks
+		X11, which a Wayland desktop serves through XWayland, and sets the system's own
+		sans-serif. A window with a scene in it keeps the page, and so does one opened
+		with ~BT~webview~BT~, a program shipping a typeface of its own, a Linux machine with
+		no display or no usable font, macOS and Android. The layout is modelled on
+		[Clay](https://github.com/nicbarker/clay), by Nic Barker.
+
+		**It behaves as a page would**: text is selected and copied, a right click opens a
+		menu, a field undoes, scroll bars drag, a screen reader reads it (UI Automation on
+		Windows, AT-SPI on Linux), and on Linux IBus or Fcitx5 types into it. An ~BT~image~BT~
+		may be PNG, JPEG, GIF, WebP or SVG.
 
 		**Opening one does not wait for it**, so a program may open as many as it likes.
 		Closing a window kills its service, and **closing the last one ends the
