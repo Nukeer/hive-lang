@@ -28,7 +28,7 @@ done
 window=""
 open_window() {
 	rm -f "$here/page.log"
-	PATH=/var/empty "$here/page" >"$here/page.log" 2>&1 &
+	HIVE_WINDOW=print PATH=/var/empty "$here/page" >"$here/page.log" 2>&1 &
 	window=$!
 	for _ in $(seq 1 100); do
 		url="$(grep -o 'http://[^ ]*' "$here/page.log" 2>/dev/null | head -1)"

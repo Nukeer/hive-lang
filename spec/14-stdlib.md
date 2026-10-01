@@ -675,15 +675,38 @@ somewhere else:
   [`spawn`](13-builtins.md#services-spawn-at-kill) — which is what opens it,
   with the state it starts from:
   `spawn(ui.window("Notes", view, update), fresh())`.
+* `webview(title, view, update)` is the same window, always drawn as a page — the
+  browser window every platform without one of its own gets — even on Windows
+  and Linux. It takes and answers with exactly what `window` does.
 * `html(view)` renders the same tree as an HTML fragment, and `page(title, view)`
   as a whole document — which is what an `httpServe` handler answers with.
 
-**What a window is.** An application-mode browser window — no address bar and no
+**What a window is.** On Windows and Linux, one the program draws itself — see
+below. Elsewhere, an application-mode browser window — no address bar and no
 tabs — running against a **profile of its own**, so it is its own process rather
 than a window inside somebody's browser: none of your own session, extensions or
 history is in it, and quitting a browser does not close it. A machine with no
 Chromium-family browser falls back to an ordinary tab, which is the one case
 where the window belongs to a browser.
+
+**On Windows and Linux the program draws its window itself**, with no browser
+anywhere, unless the window holds a `scene`, the program ships a typeface of its
+own, or it was opened with `webview`. Every other widget has a version of its own
+there, laid out by the stylesheet's own rules and light or dark as the desktop is.
+Windows sets the text in Segoe UI; Linux speaks X11 — which a Wayland desktop
+serves through XWayland — and sets it in the system's own sans-serif, read and
+drawn by the program, so neither needs a C compiler to build. A Linux machine
+with no display or no usable font gets the page, and so do macOS, Android and
+every window with a scene in it. The layout is modelled on
+[Clay](https://github.com/nicbarker/clay), by Nic Barker.
+
+**Such a window behaves as a page would.** Its text is selected and copied, a
+right click opens a menu of what can be done there, a field undoes a run of
+typing at a time, and its scroll bars and a textarea's corner can be dragged. A
+screen reader reads it — through UI Automation on Windows and AT-SPI on Linux —
+and on Linux an input method, IBus or Fcitx5, types into it where one is running.
+An `image` there may be PNG, JPEG, GIF, WebP or SVG, from `/_hive/asset/`, a web
+address or a `data:` URL, which are the places a window's page can load one from.
 
 **Opening a window does not wait for it.** `spawn` answers as soon as the window
 is up, so a program may open as many as it likes. Closing a window kills its
@@ -712,7 +735,7 @@ Two environment variables are read by a window, and by nothing else:
 
 | variable | does |
 | --- | --- |
-| `HIVE_WINDOW=print` | prints `hive-window <url>` instead of opening a browser, for whatever is going to show the page |
+| `HIVE_WINDOW=print` | prints `hive-window <url>` instead of opening a browser, for whatever is going to show the page — and keeps a window the program would draw itself a page, so there is one to show |
 | `HIVE_FOLDS=1` | prints, once a second, how many turns the window took and drew, the median, 90th-percentile and worst time each spent in `update`, `view` and sending the page, and the collections since the last line |
 
 **The window is a service.** `update` is a service's handler —

@@ -1,6 +1,6 @@
 # Examples
 
-Twenty-two programs, and between them every feature the language has. Each one
+Twenty-three programs, and between them every feature the language has. Each one
 compiles and runs on the compiler in [`../src`](../src) — that is what `./run`
 checks, and what makes these examples rather than illustrations.
 
@@ -36,6 +36,7 @@ hive test examples/15-testing/cart.test.hive
 | 20 | [advent-2025-day-2](20-advent-2025-day-2) | Advent of Code, and `assert` as a program's own check |
 | 21 | [advent-2025-day-3](21-advent-2025-day-3) | day 3, where every index is proved in range |
 | 22 | [formula-kart](22-formula-kart) | a ten-car race on a circuit rolled from a number, with a landscape round it, a server, a map and a dial |
+| 23 | [every-widget](23-every-widget) | every `hive.ui` widget but the 3D ones, with every attribute and event among them, in one window |
 
 ## What `./run` does with them
 
@@ -44,14 +45,14 @@ the program's output is worth pinning down — an `.expected` file holding what 
 prints. `./run` compares the two, so an example that stops being true stops
 passing.
 
-Nine of them are **compiled but not run**, and the reason is the same in each
+Ten of them are **compiled but not run**, and the reason is the same in each
 case: they do not finish. A server blocks forever (03, and the two games' own
-servers in 19 and 22), a window waits for a browser (17, and the two games'
-clients), a distributed pair waits for the other node (09, 13), and a vault waits
-for somebody to type a password (16). Compiling one is what can be checked
-without a person — and six of those nine carry test suites that exercise the
-rest, across the cache, the vault, the chat, the shooter's two halves and the
-race.
+servers in 19 and 22), a window waits for somebody to close it (17, 23, and the
+two games' clients), a distributed pair waits for the other node (09, 13), and a
+vault waits for somebody to type a password (16). Compiling one is what can be
+checked without a person — and seven of those ten carry test suites that exercise
+the rest, across the cache, the vault, the chat, the shooter's two halves, the
+race and the widgets.
 
 Two more have no `.expected` file because what they print is a race by design:
 `10-concurrency`, whose two `note` calls run at once, and anything that reports a

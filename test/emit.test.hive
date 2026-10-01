@@ -470,6 +470,18 @@ test "a program that opens a window says so, and one that only renders does not"
 	assert has(go(served), "hive.UiPage(")
 }
 
+test "a webview is a window that is always a page, so it carries nothing to draw one" {
+	page := "type Msg \{ Bumped }" + newline()
+		+ "func view(n: Int): hive.ui.View \{ return hive.ui.text([], \"n\") }" + newline()
+		+ "proc up(n: mut Int, m: Msg): Msg \{ n += 1  return m }" + newline()
+		+ "proc main(): void \{ w := spawn(hive.ui.webview(\"T\", view, up), 0) }"
+	assert windowed(page)
+	assert has(go(page), "hive.SyslinkSpawn(hive.UiWebview(\"T\", view, up), hive.SyslinkUnnamed, 0, ")
+	assert indexOf(emit.emitModule(loader.loadText("main.hive", page).module).modules, "uinative") is Result.Error(_)
+	drawn := replaceAll(page, "webview", "window")
+	assert indexOf(emit.emitModule(loader.loadText("main.hive", drawn).module).modules, "uinative") is Result.Ok(_)
+}
+
 test "a library call is a call of the same name on the runtime package" {
 	assert has(stmt("echo hive.conv.its(1)"), "hive.ConvIts(1)")
 	assert has(stmt("echo hive.math.sqrt(2.0)"), "hive.MathSqrt(2.0)")

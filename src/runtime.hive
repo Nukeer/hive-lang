@@ -9482,7 +9482,19 @@ func uiSource(): Str {
 			addr     SyslinkAddress
 			listener net.Listener
 			shut     bool
+			painter  uiPainter
 		}
+		`,
+		// A window drawn by the program rather than by a page. hive/uinative.go fills
+		// uiNativePainter in, where the build found nothing only a page can draw.
+		`
+		type uiPainter interface \{
+			show(v UiView)
+			open(title string, addr SyslinkAddress) bool
+			last() UiView
+		}
+
+		var uiNativePainter func() uiPainter
 		`,
 		// One watcher as publish found it, so the sending can happen off the lock.
 		//
@@ -9503,6 +9515,13 @@ func uiSource(): Str {
 		}
 
 		func (w *uiWindow) publish(v UiView) \{
+			w.mu.Lock()
+			painter := w.painter
+			w.mu.Unlock()
+			if painter != nil \{
+				painter.show(v)
+				return
+			}
 			r := &uiRender\{handlers: map[string][]UiAttr\{}}
 		`,
 		// Room for a document about the size of the last one. A builder not told how
@@ -9912,6 +9931,10 @@ func uiSource(): Str {
 			if !ok \{
 				return nil, false
 			}
+			return uiMeaning(attrs, kind, value, index)
+		}
+
+		func uiMeaning(attrs []UiAttr, kind string, value string, index int) (any, bool) \{
 			for _, a := range attrs \{
 				h := a.heard
 				if h == nil \{
@@ -9964,25 +9987,42 @@ func uiSource(): Str {
 		`
 		func UiWindow[S any, M any](title string, view func(S) UiView, update func(*S, M) M) func(*S, M) M \{
 			handler := func(state *S, msg M) M \{ return update(state, msg) }
-			startsAs(funcKey(handler), uiStarter[S, M](title, view))
+			startsAs(funcKey(handler), uiStarter[S, M](title, view, false))
 			return handler
 		}
 
 		func UiWindowAddressed[S any, M any](title string, view func(S) UiView, update func(*S, M, SyslinkAddress) M) func(*S, M, SyslinkAddress) M \{
 			handler := func(state *S, msg M, self SyslinkAddress) M \{ return update(state, msg, self) }
-			startsAs(funcKey(handler), uiStarter[S, M](title, view))
+			startsAs(funcKey(handler), uiStarter[S, M](title, view, false))
+			return handler
+		}
+		`,
+		// The same window, always a page, wherever the program could have drawn it itself.
+		`
+		func UiWebview[S any, M any](title string, view func(S) UiView, update func(*S, M) M) func(*S, M) M \{
+			handler := func(state *S, msg M) M \{ return update(state, msg) }
+			startsAs(funcKey(handler), uiStarter[S, M](title, view, true))
+			return handler
+		}
+
+		func UiWebviewAddressed[S any, M any](title string, view func(S) UiView, update func(*S, M, SyslinkAddress) M) func(*S, M, SyslinkAddress) M \{
+			handler := func(state *S, msg M, self SyslinkAddress) M \{ return update(state, msg, self) }
+			startsAs(funcKey(handler), uiStarter[S, M](title, view, true))
 			return handler
 		}
 		`,
 		// Rendering happens inside the turn, so a page never shows a mix of two states.
 		`
-		func uiStarter[S any, M any](title string, view func(S) UiView) syslinkStarter \{
+		func uiStarter[S any, M any](title string, view func(S) UiView, page bool) syslinkStarter \{
 			return func(given any, first any) (any, func(SyslinkAddress)) \{
 				update := given.(func(*S, M, syslinkTurn) M)
 				w := &uiWindow\{
 					watchers: map[NetWsConnection]uint32\{},
 					holding:  map[NetWsConnection]uint32\{},
 					token:    CryptoRandomHex(16),
+				}
+				if uiNativePainter != nil && !page && os.Getenv("HIVE_WINDOW") != "print" \{
+					w.painter = uiNativePainter()
 				}
 				tally := uiFoldTally()
 				folded := func(state *S, msg M, t syslinkTurn) M \{
@@ -10016,7 +10056,17 @@ func uiSource(): Str {
 			addr := SyslinkAddress\{Name: atomNone, Id: named.Id, box: named.box}
 			w.mu.Lock()
 			w.addr = addr
+			painter := w.painter
 			w.mu.Unlock()
+			if painter != nil \{
+				if painter.open(title, addr) \{
+					return
+				}
+				w.mu.Lock()
+				w.painter = nil
+				w.mu.Unlock()
+				w.publish(painter.last())
+			}
 
 			page := strings.NewReplacer(
 				"__TITLE__", uiEscape(title),

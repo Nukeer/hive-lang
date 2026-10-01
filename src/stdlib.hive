@@ -49,7 +49,8 @@ func goNameOf(module: Str, name: Str): Str {
 //
 // Most of it is read off `resultOf`, which answers `TUnknown` for a name its module
 // does not have. Four cannot be read that way — `task`, `map`, `json` and `crypto`
-// — so those are named in full, as is `ui.window`, whose answer is its argument.
+// — so those are named in full, as are `ui.window` and `ui.webview`, whose answer is
+// their argument.
 func hasName(module: Str, name: Str): Bool {
 	if isLibType(module, name) {
 		return true
@@ -73,7 +74,7 @@ func hasName(module: Str, name: Str): Bool {
 			return true
 		}
 	}
-	if module == "ui" && name == "window" {
+	if module == "ui" && (name == "window" || name == "webview") {
 		return true
 	}
 	if resultOf(module, name, []) is types.Ty.TUnknown {
@@ -796,7 +797,7 @@ func uiResult(name: Str, args: types.Ty[]): types.Ty {
 	if isUiAttr(name) { return types.Ty.TLib("ui", "Attr") }
 	if name == "html" || name == "page" { return types.Ty.TStr() }
 	// A window is a `spawn` handler of the same shape as its `update`.
-	if name == "window" && args bounds 2 {
+	if (name == "window" || name == "webview") && args bounds 2 {
 		return args[2]
 	}
 	return types.Ty.TUnknown()
@@ -865,7 +866,7 @@ func uiParams(name: Str): types.Ty[dyn] {
 	}
 	if name == "html" { return [view] }
 	if name == "page" { return [str, view] }
-	if name == "window" {
+	if name == "window" || name == "webview" {
 		return [str, types.Ty.TUnknown(), types.Ty.TUnknown()]
 	}
 	// An event takes the message itself, or a function to one. What its handler
@@ -1118,7 +1119,7 @@ func uiParamNames(name: Str): Str[dyn] {
 	if name == "line" { return ["attrs", "fromX", "fromY", "fromZ", "toX", "toY", "toZ"] }
 	if name == "html" { return ["view"] }
 	if name == "page" { return ["title", "view"] }
-	if name == "window" { return ["title", "view", "update"] }
+	if name == "window" || name == "webview" { return ["title", "view", "update"] }
 	if isUiEvent(name) {
 		if len(uiEventArgs(name)) == 0 { return ["message"] }
 		return ["f"]
