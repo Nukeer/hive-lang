@@ -2115,8 +2115,9 @@ func cli(): Str {
 		  Go module in ~BT~<entrypoint>-build/~BT~.
 		* **~BT~hive emit~BT~** prints the Go to stdout, so ~BT~hive emit x.hive > main.go~BT~
 		  works — progress and every error go to stderr for exactly that reason.
-		* **~BT~hive analyze~BT~** scores what the program will cost to run. It builds
-		  nothing and runs nothing, so it answers about as fast as ~BT~check~BT~ does.
+		* **~BT~hive analyze~BT~** scores what the program will cost to run, and lists what it
+		  declares and never reaches. It builds nothing and runs nothing, so it answers
+		  about as fast as ~BT~check~BT~ does.
 
 		~BT~--target~BT~ belongs to ~BT~build~BT~ and ~BT~export~BT~; ~BT~go tool dist list~BT~ names every
 		platform ~BT~build~BT~ takes. A flag a command does not know is **refused rather than
@@ -2207,6 +2208,24 @@ func cli(): Str {
 		a cost here runs from four to thirty thousand and a linear curve would put
 		everything past the first loop at zero. A callable cheap enough to say nothing
 		about scores 100.
+
+		**It also lists what is never reached** — every ~BT~func~BT~, ~BT~proc~BT~, ~BT~query~BT~ and type
+		that nothing reached from ~BT~main~BT~ or a test names, however indirectly — and every
+		parameter its body never reads:
+
+		~CODE~
+		  2 declarations never reached from ~BT~main~BT~:
+		        cart.oldTotal                       func, line 40
+		        cart.legacyTax                      func, line 52 — named only by cart.oldTotal
+
+		  1 parameter never read:
+		        cart.price                          ~BT~currency~BT~, line 18
+		~CODE~
+
+		A declaration named only by unreached code is listed too, beside what names it.
+		A parameter starting with ~BT~_~BT~ says it is unused on purpose and is left out, and
+		so is every parameter of a callable passed as a value, whose shape is the slot's
+		to decide. A file with neither a ~BT~main~BT~ nor a test lists nothing.
 
 		## ~BT~hive container~BT~
 

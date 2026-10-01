@@ -708,6 +708,15 @@ func operandsFit(a: Ty, b: Ty): Bool {
 	return accepts(a, b) || accepts(b, a)
 }
 
+func isUnion(t: Table, ty: Ty): Bool {
+	if ty is Ty.TNamed(name) {
+		if findType(t, name) is Result.Ok(info) {
+			return len(info.variants) > 0
+		}
+	}
+	return false
+}
+
 // Whether a type owns storage that two names could otherwise observe each
 // other writing to. This is what decides whether a binding needs a copy and
 // whether a clone has to be generated for a declared type.
@@ -784,20 +793,6 @@ func dimOf(ty: Ty): ast.Dim {
 		return dim
 	}
 	return ast.Dim.Any()
-}
-
-// Whether a type can be compared and hashed whole, which is what a map's key
-// has to be. Storage cannot: two vectors can hold equal contents and still be
-// different storage, so there would be no answer to whether they are the same
-// key.
-func isKeyable(t: Table, ty: Ty): Bool {
-	if ty is Ty.TStr || ty is Ty.TInt || ty is Ty.TFloat || ty is Ty.TBool || ty is Ty.TAtom {
-		return true
-	}
-	if ty is Ty.TNamed(name) {
-		return ownsStorage(t, ty) == false && findType(t, name) is Result.Ok(_)
-	}
-	return false
 }
 
 // Whether a type has an order of its own — which `sort` with one argument

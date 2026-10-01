@@ -4,26 +4,31 @@
 
 ### Language
 
-* **Every standard library module answers to its own name, with no import**: `task.sleep(10)`, `conv.sti(text)` and a `ui.View` parameter are `hive.task.sleep(10)`, `hive.conv.sti(text)` and `hive.ui.View`. The name is held the way a builtin's is — a declaration, an import, a local or a parameter of the same name comes first, per module — and `hive.<module>` reaches the library whatever was declared. `import hive.net as web` still gives a module another name.
-* **Patterns nest.** A variant's field or a vector's element may hold a pattern of its own — `foo() is Result.Ok(Foo.Bar(["foo/{padding}/bar", ...rest]))` — and is exactly the chain it abbreviates, `foo() is Result.Ok(result) && result is Foo.Bar(values) && …`, compiled the same way. A variant's position may also hold a literal it has to equal (`Result.Ok(3)`), and one pattern binding a name twice is a compile error.
-* **Exhaustiveness follows patterns all the way down.** An else-less chain terminates when its branches take every value of its subject, however deep their patterns nest — `Result.Ok(Foo.Bar(_))`, `Result.Ok(Foo.Baz)` and `Result.Error(_)` cover a `Result<Foo, E>` — and a hand-written chain on a pattern's own bindings counts the same. A vector is covered by its lengths (`[]` and `[x, ...rest]`), a `Bool` by `true` and `false`, and a string by a template that is one open hole. A chain that falls short is reported with a value no branch takes: `r` when it is `Result.Ok(Foo.Baz)`.
+* **Library modules need no `hive.` prefix**: `task.sleep(10)` is `hive.task.sleep(10)`. A declaration, import, local or parameter of the same name comes first, and `hive.<module>` always reaches the library.
+* **Patterns nest**: `foo() is Result.Ok(Foo.Bar(["foo/{padding}/bar", ...rest]))` compiles to exactly the `&&` chain it abbreviates. A variant's field may also hold a literal, as in `Result.Ok(3)`.
+* **Exhaustiveness follows nested patterns**, vector lengths (`[]` and `[x, ...rest]`) and `Bool`s, and a chain that falls short names a value no branch takes.
 
 ### Standard library
 
-* **On Windows and Linux the program draws a `hive.ui.window` itself**, with no browser. Every widget but `scene` and `inset` has a version of its own — every kind of `input`, `textarea`, `checkbox`, `select` with its list, `table` with its sticky header, `canvas`, `image`, `spinner`, dialogs and pinned overlays, and a `hint` as a tooltip — laid out by the stylesheet's own rules, light or dark as the desktop is, scaled for the display, and still built with no C compiler. Windows sets its text in Segoe UI; Linux speaks X11 (XWayland on a Wayland desktop) and reads the system's own fonts itself — TrueType, CFF and variable ones, bold from a variable font's own weight axis. A window with a scene, a program shipping `assets/font.woff2`, `HIVE_WINDOW=print`, a Linux machine with no display or no usable font, macOS and Android keep the page. The layout is modelled on [Clay](https://github.com/nicbarker/clay) by Nic Barker.
-* **Such a window does what a desktop window does.** Text is selected with the pointer and copied; a double click takes a word and a triple click a paragraph; a right click or the Menu key opens a menu of what can be done there — Undo, Redo, Cut, Copy, Paste, Delete and Select all in a field, Copy on selected text, Open and Copy on a link. A field undoes a run of typing at a time, a scroll bar can be dragged and its track clicked, a textarea is resized from its corner, an `image` may be PNG, JPEG, GIF, WebP or SVG, and a moving GIF or WebP moves.
-* **Screen readers read it and input methods type into it.** Windows answers UI Automation, which Narrator, NVDA and JAWS read; Linux answers AT-SPI, which Orca reads: every widget with its role, name, value and state, what it can do, and the focus as it moves. On Linux, IBus or Fcitx5 types into a field where one is running, so Chinese, Japanese and Korean can be written, and a keyboard's dead keys compose where none is.
-* **`hive.ui.webview(title, view, update)`** is a `window` that is always a page, on every platform, and takes and answers with exactly what `window` does. A program that opens only webviews carries none of the code that draws a window itself.
+* **Windows and Linux draw a `hive.ui.window` themselves** — every widget but `scene` and `inset`, with no browser and no C compiler. The layout is modelled on [Clay](https://github.com/nicbarker/clay) by Nic Barker.
+* **Such a window behaves like a desktop one**: selection and copying, context menus, undo, draggable scroll bars, resizable textareas, and PNG, JPEG, GIF, WebP and SVG images.
+* **Screen readers and input methods work in it**: UI Automation on Windows, AT-SPI on Linux, and IBus or Fcitx5 for typing.
+* **`hive.ui.webview(title, view, update)`** is a `window` that is always a page.
+* **`hive.syslink.setKey(key)`** sets this program's cluster key for every connection after it, held in memory only.
+
+### Tooling
+
+* **`hive analyze` lists dead code**: what nothing reached from `main` or a test names, and parameters never read.
 
 ### Examples
 
-* **`23-every-widget`**: every `hive.ui` widget but the 3D ones, with every attribute and event among them, in one window.
+* **`23-every-widget`**: every `hive.ui` widget but the 3D ones, in one window.
 
 ### Fixes
 
-* **A member of a value that has no fields is refused here**, where `n.size` on an `Int`, a field of a vector, a `Result`, a map, an address or a function reached the Go toolchain. A library module's name the program took for itself says so: `json := 3` then `json.codec()` names `hive.json`.
-* **A chain testing two fields of one value is not exhaustive over either.** `p.left is Kind.A` then `p.right is Kind.B` was read as one subject covering `Kind`, compiled, and panicked with `hive: unreachable` when `p.left` was `Kind.B`. A subject is now its whole path.
-* **A variant pattern matches only its own type.** `n is Foo.Bar` on an `Int`, or `Result.Ok(v)` on something that is not a `Result`, reached the Go toolchain.
+* **A member of a value with no fields**, such as `n.size` on an `Int`, is a compile error rather than a Go toolchain failure.
+* **A chain testing `p.left` then `p.right` no longer counts as exhaustive**; it compiled and panicked with `hive: unreachable`.
+* **A variant pattern must match its subject's type**, where a mismatch reached the Go toolchain.
 
 ## v0.2.10
 

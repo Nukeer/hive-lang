@@ -1,0 +1,5 @@
+// What `syslink_test.go` is compiled against: a node that chose its own key.
+proc main(): void {
+	hive.syslink.setKey("chosen")
+	echo hive.syslink.node()
+}

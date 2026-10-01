@@ -12,7 +12,6 @@
 // every program on the machine. An import that names no revision is pinned on
 // first use: the commit is written to a lock file beside the entrypoint, which
 // is what makes another machine build the same program.
-import ./diag
 import ./paths
 import ./progress
 import ./text
@@ -309,9 +308,4 @@ func looksLikeCommit(revision: Str): Bool {
 
 func isHexLetter(c: Str): Bool {
 	return c == "a" || c == "b" || c == "c" || c == "d" || c == "e" || c == "f"
-}
-
-// A diagnostic about a remote import, against the file that wrote it.
-func problem(file: Str, line: Int, message: Str): diag.Diagnostic {
-	return diag.Diagnostic(file, line, message)
 }

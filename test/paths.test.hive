@@ -21,12 +21,6 @@ test "stem drops the extension, and only the last one" {
 	assert paths.stem("Makefile") == "Makefile"
 }
 
-test "extensionOf keeps the dot" {
-	assert paths.extensionOf("main.hive") == ".hive"
-	assert paths.extensionOf("lib/util.go") == ".go"
-	assert paths.extensionOf("Makefile") == ""
-}
-
 test "joinPath puts one after the other" {
 	assert paths.joinPath("lib", "text.hive") == "lib/text.hive"
 	assert paths.joinPath("lib/", "text.hive") == "lib/text.hive"

@@ -47,16 +47,6 @@ func stem(path: Str): Str {
 	return join(out, ".")
 }
 
-// The extension including its dot, or `""`.
-func extensionOf(path: Str): Str {
-	base := baseOf(path)
-	if indexOf(base, ".") is Result.Ok(_) {
-		segments := split(base, ".")
-		return "." + text.charAt(segments, len(segments) - 1)
-	}
-	return ""
-}
-
 // `a` and `b`, one after the other. An absolute `b` replaces `a` outright,
 // which is what makes this safe to reach for without asking first.
 func joinPath(a: Str, b: Str): Str {
