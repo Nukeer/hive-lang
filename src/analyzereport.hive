@@ -5,6 +5,7 @@ import ./analyze
 import ./paths
 import ./progress
 import ./text
+import ./unreached
 import hive.conv
 import hive.ui
 
@@ -65,9 +66,65 @@ proc lines(entry: Str, report: analyze.Report, wrote: Str, from: Int): Str[dyn] 
 		append(out, "  " + progress.counted(quiet, "callable") + " had nothing found in "
 			+ them(quiet) + ".")
 	}
+	out = out + unreachedLines(report.unreached)
 	append(out, "")
 	append(out, "  Wrote " + wrote + " (" + progress.took(progress.since(from)) + ")")
 	return out
+}
+
+// How many unreached declarations, and unread parameters, the terminal names.
+func listed(): Int {
+	return 10
+}
+
+func unreachedLines(found: unreached.Found): Str[dyn] {
+	mut Str[dyn] out = []
+	if len(found.declarations) > 0 {
+		append(out, "")
+		append(out, "  " + progress.counted(len(found.declarations), "declaration")
+			+ " never reached from " + found.startsAt + ":")
+		mut Int said = 0
+		for each d in found.declarations {
+			if said < listed() {
+				append(out, "        " + padded(d.display, 34) + "  " + d.word + ", line {d.line}" + namers(d))
+			}
+			said = said + 1
+		}
+		if said > listed() {
+			append(out, "        and {said - listed()} more on the page")
+		}
+	}
+	if len(found.parameters) > 0 {
+		append(out, "")
+		append(out, "  " + progress.counted(len(found.parameters), "parameter") + " never read:")
+		mut Int said = 0
+		for each p in found.parameters {
+			if said < listed() {
+				append(out, "        " + padded(p.callable, 34) + "  `{p.name}`, line {p.line}")
+			}
+			said = said + 1
+		}
+		if said > listed() {
+			append(out, "        and {said - listed()} more on the page")
+		}
+	}
+	return out
+}
+
+func namers(d: unreached.Declaration): Str {
+	if len(d.namedBy) == 0 {
+		return ""
+	}
+	mut Str[dyn] first = []
+	for each name in d.namedBy {
+		if len(first) < 2 {
+			append(first, name)
+		}
+	}
+	if len(d.namedBy) > 2 {
+		append(first, "{len(d.namedBy) - 2} more")
+	}
+	return " — named only by " + join(first, ", ")
 }
 
 func them(many: Int): Str {
@@ -175,6 +232,7 @@ proc view(entry: Str, report: analyze.Report): hive.ui.View {
 		hot(report),
 		callGraph(report),
 		everything(report),
+		never(report.unreached),
 		footing()
 	])
 }
@@ -221,7 +279,8 @@ proc tiles(report: analyze.Report): hive.ui.View {
 		tile("deep copies", "{report.copies}"),
 		tile("nested loops", "{report.nests}"),
 		tile("waits in a loop", "{report.waits}"),
-		tile("deepest nest", "{report.deepest}")
+		tile("deepest nest", "{report.deepest}"),
+		tile("never reached", "{len(report.unreached.declarations)}")
 	])
 }
 
@@ -434,6 +493,38 @@ func reaches(s: analyze.Scored): Str {
 	return "{s.total}"
 }
 
+// --- What is never reached -----------------------------------------------------
+
+proc never(found: unreached.Found): hive.ui.View {
+	if found.startsAt == "" {
+		return hive.ui.none()
+	}
+	mut hive.ui.View[dyn] said = [
+		hive.ui.text([hive.ui.size(hive.ui.TextSize.Subtitle())], "Never reached")
+	]
+	if len(found.declarations) == 0 {
+		append(said, hive.ui.text([hive.ui.tone(hive.ui.Tone.Muted())],
+			"Everything this program declares is reached from " + found.startsAt + "."))
+	} else {
+		mut Str[dyn][dyn] rows = [["declaration", "kind", "line", "named only by"]]
+		for each d in found.declarations {
+			append(rows, [d.display, d.word, "{d.line}", join(d.namedBy, ", ")])
+		}
+		append(said, hive.ui.text([hive.ui.size(hive.ui.TextSize.Caption()), hive.ui.tone(hive.ui.Tone.Muted())],
+			"Nothing reached from " + found.startsAt + " names these, however indirectly."))
+		append(said, hive.ui.table([], rows))
+	}
+	if len(found.parameters) > 0 {
+		mut Str[dyn][dyn] rows = [["callable", "parameter", "line"]]
+		for each p in found.parameters {
+			append(rows, [p.callable, p.name, "{p.line}"])
+		}
+		append(said, hive.ui.text([hive.ui.size(hive.ui.TextSize.Subtitle())], "Never read"))
+		append(said, hive.ui.table([], rows))
+	}
+	return hive.ui.column([hive.ui.gap(8)], said)
+}
+
 // --- What the numbers are ------------------------------------------------------
 
 // The most important thing on the page: nothing here is a measurement.
@@ -453,7 +544,9 @@ proc footing(): hive.ui.View {
 		hive.ui.text([hive.ui.tone(hive.ui.Tone.Muted())],
 			"`reaches` is the body's own cost plus half of the worst thing one call to it runs into — the worst rather than the sum, so a `main` that calls five hundred clean helpers is still clean, and half of it so that the callable a cost is actually *in* outranks everyone who merely reaches it. A `+` on the number means the callable is on a cycle, where there is no path to be worst: that total is a floor."),
 		hive.ui.text([hive.ui.tone(hive.ui.Tone.Muted())],
-			"Tests, queries and imported Go functions are not scored — a test is not shipped, a query's cost is the `hive.sql.run` that executes it, and what is past the Go boundary is not this compiler's to read.")
+			"Tests, queries and imported Go functions are not scored — a test is not shipped, a query's cost is the `hive.sql.run` that executes it, and what is past the Go boundary is not this compiler's to read."),
+		hive.ui.text([hive.ui.tone(hive.ui.Tone.Muted())],
+			"A declaration is never reached when nothing reached from `main` or a test names it, so one named only by another unreached declaration is listed too, beside its namer. A parameter is never read when its body never names it — except one starting with `_`, which says so on purpose, and one of a callable passed as a value, whose shape is the slot's to decide.")
 	])
 }
 

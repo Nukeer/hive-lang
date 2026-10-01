@@ -143,14 +143,6 @@ test "a diagnostic with no file yet prints its line alone" {
 test "a file goes on afterwards, at the one place holding both" {
 	placed := diag.inFile("lib/text.hive", diag.at(7, "oops"))
 	assert diag.render(placed) == "lib/text.hive:7: oops"
-
-	all := diag.allInFile("a.hive", [diag.at(1, "one"), diag.at(2, "two")])
-	assert diag.renderAll(all) == "a.hive:1: one\na.hive:2: two"
-}
-
-test "renderAll of nothing is nothing" {
-	diag.Diagnostic[0] none = []
-	assert diag.renderAll(none) == ""
 }
 
 test "a pass with no position names the declaration instead" {

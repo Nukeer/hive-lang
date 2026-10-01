@@ -17,11 +17,6 @@ type Outcome {
 	detail: Str[dyn]
 }
 
-type Report {
-	lines: Str[dyn]
-	passed: Int
-	failed: Int
-}
 // Render a finished test run.
 proc render(directory: Str, titles: Str[], run: Str): Str {
 	outcomes := parseRun(run, titles)

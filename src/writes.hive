@@ -590,10 +590,3 @@ func calleeName(callee: ast.Expr): Str {
 	}
 	return ""
 }
-
-// The declared type a field belongs to, or `""` where it is not one this module
-// can name.
-func ownerName(ty: types.Ty): Str {
-	if ty is types.Ty.TNamed(name) { return name }
-	return ""
-}

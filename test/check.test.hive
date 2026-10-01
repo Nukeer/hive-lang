@@ -912,6 +912,12 @@ test "the names it does have are left alone" {
 	assert problemCount(inMain("hive.map.Map<Str, Int> m = hive.map.new()  hive.map.set(m, \"a\", 1)")) == 0
 }
 
+test "hive.syslink.setKey takes the key as a Str and answers with nothing" {
+	assert problemCount(inMain("hive.syslink.setKey(\"ours\")")) == 0
+	assert problemCount(inMain("syslink.setKey(key: \"ours\")")) == 0
+	assert opens(problem(inMain("hive.syslink.setKey(42)")), "in `main`: the first argument of `hive.syslink.setKey` wants Str and this is Int")
+}
+
 test "hive.time builds a stamp and reads the current instant" {
 	assert problemCount(inMain("echo hive.time.dateFrom(2026, 9, 14)")) == 0
 	assert problemCount(inMain("echo hive.time.dateTimeFrom(2026, 9, 14, 13, 30, 0)")) == 0

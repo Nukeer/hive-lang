@@ -491,6 +491,7 @@ test "a library call is a call of the same name on the runtime package" {
 	assert has(stmt("echo hive.time.lastDayOfMonth()"), "hive.TimeLastDayOfMonth()")
 	assert has(stmt("echo hive.time.weekday()"), "hive.TimeWeekday()")
 	assert has(stmt("echo hive.time.millisecond()"), "hive.TimeMillisecond()")
+	assert has(stmt("hive.syslink.setKey(\"ours\")"), "hive.SyslinkSetKey(\"ours\")")
 }
 
 test "only the modules a program referenced are asked for" {

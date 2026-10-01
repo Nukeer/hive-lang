@@ -358,7 +358,7 @@ func codecFormats(): Str[dyn] {
 
 func syslinkResult(name: Str): types.Ty {
 	syslinkError := types.Ty.TLib("syslink", "SyslinkError")
-	if name == "monitor" {
+	if name == "monitor" || name == "setKey" {
 		return types.Ty.TVoid()
 	}
 	if name == "listen" {
@@ -1054,6 +1054,7 @@ func paramNamesOf(module: Str, name: Str): Str[dyn] {
 	if module == "syslink" {
 		if name == "listen" { return ["endpoint"] }
 		if name == "monitor" { return ["watcher", "target", "notice"] }
+		if name == "setKey" { return ["key"] }
 		return []
 	}
 	if module == "sql" {
@@ -1181,7 +1182,7 @@ func mapParams(name: Str): types.Ty[dyn] {
 
 func syslinkParams(name: Str): types.Ty[dyn] {
 	address := types.Ty.TAddress()
-	if name == "listen" { return [types.Ty.TStr()] }
+	if name == "listen" || name == "setKey" { return [types.Ty.TStr()] }
 	if name == "monitor" { return [address, address, types.Ty.TUnknown()] }
 	// `node` and `peers` ask for nothing.
 	return []

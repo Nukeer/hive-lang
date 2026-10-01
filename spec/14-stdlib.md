@@ -535,6 +535,7 @@ What the module has:
 * `monitor(watcher, target, notice)` posts `notice` to `watcher` — a service on
   this node — when `target` dies; an already-dead target reports at once.
 * `listen(endpoint)`, `node()`, `peers()`.
+* `setKey(key)` makes `key` this program's cluster key — see below.
 
 **`listen` answers with the endpoint a peer should dial**, which is not always the
 one it was given: a port of `0` asks the kernel to choose, and what comes back —
@@ -587,6 +588,19 @@ key**, because that is what decides the bytes; a `Default` stays out of it, sinc
 it changes what a decoder will accept rather than what an encoder writes. Every
 connection is TLS 1.3, mutually authenticated, with no plaintext path. **Delivery is best-effort:**
 messages queued when a node is declared down are dropped.
+
+**The cluster key** is what a connection proves both ends hold; two nodes with
+different keys turn each other away. It is the last `setKey` the program made,
+else `HIVE_SYSLINK_KEY`, else `~/.hive/syslink.key`, which is created on first use
+— so every program a user runs on one machine shares a key unless told otherwise.
+
+* **`setKey(key)` is the program's own.** It lives in that process's memory and
+  nowhere else: it is never written to `syslink.key`, never put in the
+  environment, and a program that sets one before it connects never reads or
+  creates the file at all.
+* **It applies from the next connection on**, made or accepted. One already open
+  was proved with the key it opened under, and stays open.
+* An empty key proves nothing about who holds it, so `setKey("")` panics.
 
 ## 14.11 `hive.task`
 

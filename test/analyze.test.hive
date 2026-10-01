@@ -6,6 +6,7 @@ import ../src/analyzereport
 import ../src/loader
 import ../src/mono
 import ../src/text
+import ../src/unreached
 import hive.ui
 
 // --- Asking a program -----------------------------------------------------------
@@ -13,7 +14,7 @@ import hive.ui
 proc reportOf(source: Str): analyze.Report {
 	p := loader.loadText("main.hive", source)
 	expanded := mono.expand(p.module, 0)
-	return analyze.analyzeModule(expanded.module)
+	return analyze.analyzeModule(expanded.module, unreached.find(p.module, p.sources))
 }
 
 // A whole program wrapped around one body.
@@ -645,6 +646,84 @@ test "a copy is spelled copies" {
 test "a clean program's report says so rather than showing an empty list" {
 	said := join(analyzereport.lines("main.hive", reportOf(inMain("echo \"x\"")), "main-analysis.html", 0), "\n")
 	assert text.contains(said, "Nothing here looks expensive.")
+}
+
+// --- What is never reached ---------------------------------------------------------
+
+proc unreachedOf(source: Str): unreached.Found {
+	p := loader.loadText("main.hive", source)
+	return unreached.find(p.module, p.sources)
+}
+
+func displays(found: unreached.Found): Str {
+	mut Str[dyn] out = []
+	for each d in found.declarations {
+		append(out, d.display)
+	}
+	return join(out, ",")
+}
+
+test "a declaration nothing reached from main names is listed" {
+	found := unreachedOf("func used(): Int \{ return 1 }\nfunc unused(): Int \{ return 2 }\ntype Spare \{ n: Int }\nproc main(): void \{ echo used() }")
+	assert displays(found) == "unused,Spare"
+	assert found.startsAt == "`main`"
+}
+
+test "one named only by unreached code is listed with what names it" {
+	found := unreachedOf("func helper(): Int \{ return 1 }\nfunc unused(): Int \{ return helper() }\nproc main(): void \{ }")
+	assert displays(found) == "helper,unused"
+	for each d in found.declarations {
+		if d.display == "helper" {
+			assert join(d.namedBy, ",") == "unused"
+		} else {
+			assert len(d.namedBy) == 0
+		}
+	}
+}
+
+test "a test reaches what it names, as main does" {
+	found := unreachedOf("func checked(): Int \{ return 1 }\nfunc unused(): Int \{ return 2 }\ntest \"it\" \{ assert checked() == 1 }")
+	assert displays(found) == "unused"
+	assert found.startsAt == "a test"
+}
+
+test "a file with neither main nor a test reports nothing" {
+	found := unreachedOf("func a(): Int \{ return 1 }")
+	assert found.startsAt == ""
+	assert displays(found) == ""
+}
+
+test "a generic nothing calls is still there to name" {
+	found := unreachedOf("func firstOf(v: T[]): Result<T, Bool> \{ if v bounds 0 \{ return Result.Ok(v[0]) } return Result.Error(false) }\nproc main(): void \{ }")
+	assert displays(found) == "firstOf"
+}
+
+test "a type reached through a field, a constructor or a pattern is reached" {
+	found := unreachedOf("type Inner \{ n: Int }\ntype Outer \{ inner: Inner }\ntype Shape \{ Dot  Box }\nproc main(): void \{ o := Outer(Inner(1))  echo o.inner.n  s := Shape.Dot()  if s is Shape.Box \{ } }")
+	assert displays(found) == ""
+}
+
+test "a parameter its body never names is listed, unless it says so with `_`" {
+	found := unreachedOf("func twice(n: Int, unused: Int, _spare: Int): Int \{ return n * 2 }\nproc main(): void \{ echo twice(1, 2, 3) }")
+	assert len(found.parameters) == 1
+	for each p in found.parameters {
+		assert p.callable == "twice"
+		assert p.name == "unused"
+	}
+}
+
+test "a callable passed as a value keeps the shape its slot asks for" {
+	found := unreachedOf("func first(a: Str, b: Str): Bool \{ return true }\nproc main(): void \{ echo sort([\"b\", \"a\"], first) }")
+	assert len(found.parameters) == 0
+}
+
+test "the terminal and the page list what is never reached" {
+	source := "func unused(): Int \{ return 2 }\nproc main(): void \{ }"
+	said := join(analyzereport.lines("main.hive", reportOf(source), "main-analysis.html", 0), "\n")
+	assert text.contains(said, "1 declaration never reached from `main`:")
+	assert text.contains(said, "unused")
+	page := hive.ui.html(analyzereport.view("main.hive", reportOf(source)))
+	assert text.contains(page, "Never reached")
 }
 
 // --- Every finding says something ------------------------------------------------------

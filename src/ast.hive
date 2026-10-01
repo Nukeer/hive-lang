@@ -338,15 +338,6 @@ func declLine(d: Decl): Int {
 	return 0
 }
 
-// Whether a type declaration is a tagged union rather than a struct, which the
-// declaration answers by whether it wrote any variants.
-func isUnion(d: Decl): Bool {
-	if d is Decl.TypeDecl(_, _, variants, _) {
-		return len(variants) > 0
-	}
-	return false
-}
-
 // --- Arguments onto parameters -----------------------------------------------
 //
 // Named arguments may appear anywhere; only the unnamed ones need to be in

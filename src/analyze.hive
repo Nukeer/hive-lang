@@ -9,6 +9,7 @@ import ./infer
 import ./text
 import ./token
 import ./types
+import ./unreached
 import ./writes
 import hive.conv
 import hive.map
@@ -139,6 +140,7 @@ type Report {
 	nests: Int
 	waits: Int
 	deepest: Int
+	unreached: unreached.Found
 }
 
 // --- The pass ------------------------------------------------------------------
@@ -146,7 +148,7 @@ type Report {
 // Tests, queries and imported Go functions are left out: a test is not shipped,
 // a query's cost is the `hive.sql.run` that runs it, and what is past the Go
 // boundary is not this compiler's to read.
-proc analyzeModule(m: ast.Module): Report {
+proc analyzeModule(m: ast.Module, found: unreached.Found): Report {
 	t := types.tableOf(m)
 	written := writes.writtenShapes(m)
 	leaked := writes.leakedBy(t, m.decls)
@@ -178,7 +180,7 @@ proc analyzeModule(m: ast.Module): Report {
 				scoreOf(own), false, w.found, w.calls, ""))
 		}
 	}
-	return summarised(propagated(scored), deepest)
+	return summarised(propagated(scored), deepest, found)
 }
 
 // The names a body may write through from the start.
@@ -1584,7 +1586,7 @@ func worst(scored: Scored[], total: Int[], calls: Str[], index: hive.map.Map<Str
 
 // --- The whole program ---------------------------------------------------------
 
-proc summarised(scored: Scored[], deepest: Int): Report {
+proc summarised(scored: Scored[], deepest: Int, found: unreached.Found): Report {
 	mut Int findings = 0
 	mut Int copies = 0
 	mut Int nests = 0
@@ -1609,7 +1611,7 @@ proc summarised(scored: Scored[], deepest: Int): Report {
 	if len(scored) > 0 {
 		score = sum / len(scored)
 	}
-	return Report(ranked(scored), score, len(scored), findings, copies, nests, waits, deepest)
+	return Report(ranked(scored), score, len(scored), findings, copies, nests, waits, deepest, found)
 }
 
 // Worst first, alphabetically within a tie, so two runs print the same report.

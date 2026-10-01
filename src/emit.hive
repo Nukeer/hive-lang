@@ -2097,7 +2097,7 @@ proc arithmetic(em: mut Emit, env: infer.Env, op: ast.BinOp, l: Str, r: Str, ty:
 // A scalar compares with Go's own `==`; anything that owns storage compares
 // structurally, which is what `==` means on a vector, a map and a declared type.
 proc equality(em: mut Emit, env: infer.Env, l: Str, r: Str, ty: types.Ty): Str {
-	if types.ownsStorage(env.table, ty) || isUnion(env.table, ty) {
+	if types.ownsStorage(env.table, ty) || types.isUnion(env.table, ty) {
 		return "hive.Eq(" + l + ", " + r + ")"
 	}
 	if ty is types.Ty.TResult(_, _) {
@@ -2109,22 +2109,13 @@ proc equality(em: mut Emit, env: infer.Env, l: Str, r: Str, ty: types.Ty): Str {
 	return "(" + l + " == " + r + ")"
 }
 
-func isUnion(t: types.Table, ty: types.Ty): Bool {
-	if ty is types.Ty.TNamed(name) {
-		if types.findType(t, name) is Result.Ok(info) {
-			return len(info.variants) > 0
-		}
-	}
-	return false
-}
-
 // --- Calls -------------------------------------------------------------------
 
 proc member(em: mut Emit, env: infer.Env, subject: ast.Expr, field: Str): Str {
 	// `hive.<module>` on its own is not a value; only a call ever reaches
 	// through it.
 	on := expr(em, env, subject, types.Ty.TUnknown())
-	if isUnion(env.table, infer.typeOf(env, subject)) {
+	if types.isUnion(env.table, infer.typeOf(env, subject)) {
 		return on + "." + sharedGetter(field) + "()"
 	}
 	return on + "." + goField(field)
@@ -3074,19 +3065,7 @@ proc mirrorFields(em: mut Emit, fields: ast.Field[], into: Bool): Str {
 // What the Go file calls a type Hive mirrored. Declarations are prefixed like
 // any module's — `measures_1_Weight` — and Go knows it by the last piece.
 func goSideName(flat: Str): Str {
-	pieces := split(flat, "_")
-	if pieces bounds len(pieces) - 1 {
-		return lastOf(pieces)
-	}
-	return flat
-}
-
-func lastOf(pieces: Str[]): Str {
-	last := len(pieces) - 1
-	if pieces bounds last {
-		return pieces[last]
-	}
-	return ""
+	return paths.lastOf(split(flat, "_"))
 }
 
 // --- Services ----------------------------------------------------------------
@@ -3181,7 +3160,7 @@ proc carried(em: mut Emit, env: infer.Env, value: ast.Expr, ty: types.Ty): Str {
 	written := cloned(env.table, ty, expr(em, env, value, ty))
 	// A message travels as its *mailbox* type rather than the variant it happens
 	// to be: what the far side decodes into is the whole protocol.
-	if isUnion(env.table, ty) {
+	if types.isUnion(env.table, ty) {
 		return goType(ty) + "(" + written + ")"
 	}
 	return written

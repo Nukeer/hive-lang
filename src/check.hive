@@ -981,7 +981,7 @@ proc checkAssign(c: mut Check, env: infer.Env, target: ast.Expr, value: ast.Expr
 		report(c, "cannot assign to `{root}`: it is immutable — declare it with `mut` to allow reassignment")
 		return
 	}
-	if target is ast.Expr.Member(owner, _) && isUnion(env.table, infer.typeOf(env, owner)) {
+	if target is ast.Expr.Member(owner, _) && types.isUnion(env.table, infer.typeOf(env, owner)) {
 		report(c, "a value of a union is taken apart with `is` and built whole, so one of its fields is not assigned on its own. Build the variant again with the new value")
 		return
 	}
@@ -1199,15 +1199,6 @@ func shadowedModule(subject: ast.Expr): Str {
 		}
 	}
 	return ""
-}
-
-func isUnion(t: types.Table, ty: types.Ty): Bool {
-	if ty is types.Ty.TNamed(name) {
-		if types.findType(t, name) is Result.Ok(info) {
-			return len(info.variants) > 0
-		}
-	}
-	return false
 }
 
 func unsharedField(t: types.Table, typeName: Str, field: Str): Str {

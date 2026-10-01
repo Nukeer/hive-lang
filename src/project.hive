@@ -23,6 +23,7 @@ import ./runtime
 import ./shim
 import ./text
 import ./uinative
+import ./unreached
 import ./vendor
 import hive.file
 import hive.map
@@ -116,6 +117,8 @@ type Compiled {
 	errors: diag.Diagnostic[dyn]
 	// The files it was flattened from, which place what a later pass reports.
 	sources: loader.Source[dyn]
+	// Before generics were expanded, which drops a generic nothing calls.
+	loaded: ast.Module
 }
 
 // `from` is when the command started; every line of progress counts from it.
@@ -129,7 +132,7 @@ proc passes(entry: Str, from: Int): Compiled {
 	if len(emitted.errors) > 0 {
 		return refused(loader.placed(loader.Program(made.module, made.sources, []), entry, emitted.errors))
 	}
-	return Compiled(made.module, emitted, [], made.sources)
+	return Compiled(made.module, emitted, [], made.sources, made.loaded)
 }
 
 // Everything up to the emitter and no further. Split out because `hive analyze`
@@ -159,11 +162,11 @@ proc checked(entry: Str, from: Int): Compiled {
 	if len(inRange) > 0 {
 		return refused(loader.placed(program, entry, inRange))
 	}
-	return Compiled(expanded.module, emit.Emitted("", [], [], [], [], false, []), [], program.sources)
+	return Compiled(expanded.module, emit.Emitted("", [], [], [], [], false, []), [], program.sources, program.module)
 }
 
 func refused(errors: diag.Diagnostic[dyn]): Compiled {
-	return Compiled(ast.Module([], [], []), emit.Emitted("", [], [], [], [], false, []), errors, [])
+	return Compiled(ast.Module([], [], []), emit.Emitted("", [], [], [], [], false, []), errors, [], ast.Module([], [], []))
 }
 
 // Compile `entry` and write the Go project for it.
@@ -744,7 +747,7 @@ proc analyse(entry: Str, from: Int): Result<Analysed, diag.Diagnostic[dyn]> {
 		return Result.Error(made.errors)
 	}
 	progress.step(from, "scoring " + progress.counted(len(made.module.decls), "declaration"))
-	report := analyze.analyzeModule(made.module)
+	report := analyze.analyzeModule(made.module, unreached.find(made.loaded, made.sources))
 	path := analyzereport.pathOf(entry)
 	progress.step(from, "writing " + paths.baseOf(path))
 	if hive.file.write(path, analyzereport.page(entry, report)) is Result.Error(why) {

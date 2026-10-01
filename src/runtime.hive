@@ -157,18 +157,6 @@ func requires(module: Str): Str[dyn] {
 	return []
 }
 
-// Every file a build needs, given the modules the program referenced.
-func filesFor(modules: Str[]): Str[dyn] {
-	mut Str[dyn] out = []
-	append(out, "runtime.go")
-	for each m in modules {
-		if moduleSource(m) != "" {
-			append(out, m + ".go")
-		}
-	}
-	return out
-}
-
 // --- The core ----------------------------------------------------------------
 
 func coreSource(): Str {
@@ -7134,9 +7122,17 @@ func syslinkNetSource(): Str {
 			secretOnce sync.Once
 			secretVal  []byte
 			secretErr  error
+			chosenMu   sync.RWMutex
+			chosenKey  []byte
 		)
 
 		func clusterSecret() ([]byte, error) \{
+			chosenMu.RLock()
+			chosen := chosenKey
+			chosenMu.RUnlock()
+			if chosen != nil \{
+				return chosen, nil
+			}
 			secretOnce.Do(func() \{
 				if env := os.Getenv("HIVE_SYSLINK_KEY"); env != "" \{
 					secretVal = []byte(env)
@@ -7169,6 +7165,19 @@ func syslinkNetSource(): Str {
 				secretVal = fresh
 			})
 			return secretVal, secretErr
+		}
+		`,
+		// SyslinkSetKey is this program's key from here on, held in memory and nowhere
+		// else. A connection made or accepted after it proves itself with it; one already
+		// open stays as it is.
+		`
+		func SyslinkSetKey(key string) \{
+			if key == "" \{
+				panic("hive: syslink.setKey: an empty key proves nothing about who holds it")
+			}
+			chosenMu.Lock()
+			chosenKey = []byte(key)
+			chosenMu.Unlock()
 		}
 		`,
 		// ephemeralCert is this node's certificate: a fresh Ed25519 key, self-signed,
