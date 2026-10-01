@@ -5,6 +5,8 @@
 ### Language
 
 * **Every standard library module answers to its own name, with no import**: `task.sleep(10)`, `conv.sti(text)` and a `ui.View` parameter are `hive.task.sleep(10)`, `hive.conv.sti(text)` and `hive.ui.View`. The name is held the way a builtin's is — a declaration, an import, a local or a parameter of the same name comes first, per module — and `hive.<module>` reaches the library whatever was declared. `import hive.net as web` still gives a module another name.
+* **Patterns nest.** A variant's field or a vector's element may hold a pattern of its own — `foo() is Result.Ok(Foo.Bar(["foo/{padding}/bar", ...rest]))` — and is exactly the chain it abbreviates, `foo() is Result.Ok(result) && result is Foo.Bar(values) && …`, compiled the same way. A variant's position may also hold a literal it has to equal (`Result.Ok(3)`), and one pattern binding a name twice is a compile error.
+* **Exhaustiveness follows patterns all the way down.** An else-less chain terminates when its branches take every value of its subject, however deep their patterns nest — `Result.Ok(Foo.Bar(_))`, `Result.Ok(Foo.Baz)` and `Result.Error(_)` cover a `Result<Foo, E>` — and a hand-written chain on a pattern's own bindings counts the same. A vector is covered by its lengths (`[]` and `[x, ...rest]`), a `Bool` by `true` and `false`, and a string by a template that is one open hole. A chain that falls short is reported with a value no branch takes: `r` when it is `Result.Ok(Foo.Baz)`.
 
 ### Standard library
 
@@ -20,6 +22,8 @@
 ### Fixes
 
 * **A member of a value that has no fields is refused here**, where `n.size` on an `Int`, a field of a vector, a `Result`, a map, an address or a function reached the Go toolchain. A library module's name the program took for itself says so: `json := 3` then `json.codec()` names `hive.json`.
+* **A chain testing two fields of one value is not exhaustive over either.** `p.left is Kind.A` then `p.right is Kind.B` was read as one subject covering `Kind`, compiled, and panicked with `hive: unreachable` when `p.left` was `Kind.B`. A subject is now its whole path.
+* **A variant pattern matches only its own type.** `n is Foo.Bar` on an `Int`, or `Result.Ok(v)` on something that is not a `Result`, reached the Go toolchain.
 
 ## v0.2.10
 

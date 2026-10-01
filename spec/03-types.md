@@ -79,7 +79,7 @@ Result.Error(payload) // carries an E
 ```
 
 It is how every fallible operation reports itself. Matching both variants is
-exhaustive ([07](07-patterns.md#75-exhaustiveness)).
+exhaustive ([07](07-patterns.md#76-exhaustiveness)).
 
 ## 3.3 Vectors
 

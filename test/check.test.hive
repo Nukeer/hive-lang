@@ -72,6 +72,65 @@ test "a library module's name the program took for itself is not the module" {
 	assert problemCount("func time(): Int \{ return 1 }\nproc main(): void \{ echo hive.time.now()  task.sleep(1) }") == 0
 }
 
+test "a variant pattern matches only its own type" {
+	foo := "type Foo \{ Bar  Baz }\n"
+	assert problem(foo + inMain("n := 3  if n is Foo.Bar \{ }")) == "in `main`: `Foo.Bar` matches a `Foo`, and what it is matched against is Int"
+	assert problem(inMain("n := 3  if n is Result.Ok(v) \{ }")) == "in `main`: `Result.Ok` matches a `Result`, and what it is matched against is Int"
+	assert problem(foo + inMain("Result<Str, Bool> r = Result.Ok(\"x\")  if r is Result.Ok(Foo.Bar) \{ }")) == "in `main`: `Foo.Bar` matches a `Foo`, and what it is matched against is Str"
+	assert problemCount(foo + inMain("Result<Foo, Bool> r = Result.Ok(Foo.Bar())  if r is Result.Ok(Foo.Bar) \{ }")) == 0
+}
+
+test "a literal in a variant's position is compared with what it holds" {
+	assert problem(inMain("r := Result.Ok(3)  if r is Result.Ok(\"three\") \{ }")) == "in `main`: `==` wants two of one type, and these are Int and Str"
+	assert problemCount(inMain("r := Result.Ok(3)  if r is Result.Ok(3) \{ }")) == 0
+}
+
+proc ending(params: Str, chain: Str): Str {
+	return problem("type Foo \{ Bar \{ n: Int }  Baz }\ntype Flag \{ On \{ loud: Bool }  Off }\nfunc f({params}): Str \{ {chain} }")
+}
+
+func takes(subject: Str, value: Str): Str {
+	return "in `f`: `f` answers with Str, so every path through it has to return one, and no branch of the else-less `if` chain it ends with takes `{subject}` when it is `{value}`. Give that a branch of its own, or end the chain with an `else`"
+}
+
+test "nested patterns cover by what they nest" {
+	assert ending("r: Result<Foo, Str>", "if r is Result.Ok(Foo.Bar(_)) \{ return \"a\" } else if r is Result.Ok(Foo.Baz) \{ return \"b\" } else if r is Result.Error(_) \{ return \"c\" }") == ""
+	assert ending("r: Result<Foo, Str>", "if r is Result.Ok(Foo.Bar(_)) \{ return \"a\" } else if r is Result.Error(_) \{ return \"c\" }") == takes("r", "Result.Ok(Foo.Baz)")
+}
+
+test "a hand-written chain covers exactly as the nested pattern it spells out" {
+	assert ending("r: Result<Foo, Str>", "if r is Result.Ok(x) && x is Foo.Bar(_) \{ return \"a\" } else if r is Result.Ok(x) && x is Foo.Baz \{ return \"b\" } else if r is Result.Error(_) \{ return \"c\" }") == ""
+}
+
+test "a vector is covered by its lengths" {
+	assert ending("v: Str[dyn]", "if v is [] \{ return \"a\" } else if v is [x, ...rest] \{ return x }") == ""
+	assert ending("v: Str[dyn]", "if v is [...all] \{ return \"a\" }") == ""
+	assert ending("v: Str[dyn]", "if v is [] \{ return \"a\" } else if v is [x] \{ return x }") == takes("v", "[_, _, ...]")
+	assert ending("v: Str[dyn]", "if v is [\"a\", ...rest] \{ return \"a\" } else if v is [] \{ return \"b\" }") == takes("v", "[_]")
+}
+
+test "a Bool is covered by true and false" {
+	assert ending("f: Flag", "if f is Flag.On(true) \{ return \"a\" } else if f is Flag.On(false) \{ return \"b\" } else if f is Flag.Off \{ return \"c\" }") == ""
+	assert ending("f: Flag", "if f is Flag.On(true) \{ return \"a\" } else if f is Flag.Off \{ return \"c\" }") == takes("f", "Flag.On(false)")
+}
+
+test "a string is covered only by a template that is one open hole" {
+	assert ending("s: Str", "if s is \"a\" \{ return \"a\" } else if s is \"\{rest}\" \{ return rest }") == ""
+	assert opens(ending("s: Str", "if s is \"a\" \{ return \"a\" } else if s is \"b\" \{ return \"b\" }"), "in `f`: `f` answers with Str, so every path through it has to return one. A path terminates")
+}
+
+test "a branch whose condition goes past its pattern takes only part of it" {
+	assert ending("r: Result<Int, Str>", "if r is Result.Ok(n) && n > 0 \{ return \"a\" } else if r is Result.Error(_) \{ return \"b\" }") == takes("r", "Result.Ok(_)")
+	assert ending("r: Result<Int, Str>", "if r is Result.Ok(n) && n > 0 \{ return \"a\" } else if r is Result.Ok(_) \{ return \"a\" } else if r is Result.Error(_) \{ return \"b\" }") == ""
+	assert ending("r: Result<Int, Str>", "if r is Result.Ok(_) \{ return \"a\" } else if r is Result.Error(\"x\") \{ return \"b\" }") == takes("r", "Result.Error(_)")
+}
+
+test "two fields are two subjects, and a chain may cover either" {
+	assert ending("p: Result<Foo, Str>, q: Foo", "if q is Foo.Bar(_) \{ return \"a\" } else if p is Result.Ok(_) \{ return \"b\" } else if q is Foo.Baz \{ return \"c\" }") == ""
+	got := problem("type Kind \{ A  B }\ntype Pair \{ left: Kind  right: Kind }\nfunc f(p: Pair): Str \{ if p.left is Kind.A \{ return \"a\" } else if p.right is Kind.B \{ return \"b\" } }")
+	assert got == takes("p.left", "Kind.B")
+}
+
 test "a variant a type does not have is named" {
 	got := problem("type Shape \{ Circle \{ radius: Int } }\nproc main(): void \{ echo Shape.Square(1) }")
 	assert got == "in `main`: `Shape` has no variant `Square`"
