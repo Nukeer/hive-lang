@@ -138,8 +138,10 @@ terminates by ending in:
 * `panic`, or a call to `hive.term.exit` — both handy for a tail you know is
   unreachable;
 * an `if`/`else` whose every branch terminates; or
-* an else-less `if`/`else if` chain that covers its subject's whole type — a
-  `Result`'s `Ok` and `Error`, or every variant of a declared union.
+* an else-less `if`/`else if` chain whose every branch terminates and whose
+  patterns take every value of its subject — a `Result`'s `Ok` and `Error`, every
+  variant of a declared union, nested as deep as they go
+  ([07](07-patterns.md#76-exhaustiveness)).
 
 An `assert` does not terminate a path: one that holds carries on past it.
 Anything else is a compile error. The last case is what lets a total function

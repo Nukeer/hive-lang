@@ -11,6 +11,7 @@
 // The pass runs on a flattened module whose nodes carry no position, so a message
 // names the declaration rather than a line. Spec 17.3 records that limit.
 import ./ast
+import ./cover
 import ./diag
 import ./infer
 import ./stdlib
@@ -743,7 +744,13 @@ proc checkCallable(c: mut Check, env: infer.Env, name: Str, params: ast.Param[],
 	if c.result is types.Ty.TVoid {
 		return
 	}
-	if terminates(env.table, body) == false {
+	if terminates(env.table, body) {
+		return
+	}
+	missed := missedAtEnd(env.table, body)
+	if missed != "" {
+		report(c, "`{name}` answers with " + types.show(c.result) + ", so every path through it has to return one, and no branch of the else-less `if` chain it ends with takes " + missed + ". Give that a branch of its own, or end the chain with an `else`")
+	} else {
 		report(c, "`{name}` answers with " + types.show(c.result) + ", so every path through it has to return one. A path terminates by ending in `return` or `panic`, in `hive.term.exit`, in an `if`/`else` whose every branch terminates, or in an else-less `if`/`else if` chain that covers its subject's whole type. An `assert` does not: one that holds carries on past it")
 	}
 }
@@ -2318,6 +2325,8 @@ proc checkConstructorPattern(c: mut Check, subjectType: types.Ty, path: Str[], b
 			report(c, "`Result` has two variants, `Ok` and `Error`, and `{variant}` is neither")
 		} else if parenthesised && len(bindings) != 1 {
 			report(c, "`Result.{variant}` carries one payload, and this pattern binds " + countOf(len(bindings)))
+		} else {
+			checkPatternType(c, subjectType, head, variant)
 		}
 		return
 	}
@@ -2329,10 +2338,26 @@ proc checkConstructorPattern(c: mut Check, subjectType: types.Ty, path: Str[], b
 		// Name every field or none, so a pattern never quietly skips one.
 		if parenthesised && len(bindings) != len(fields) {
 			report(c, "`" + types.shownName(head) + ".{variant}` has " + fieldCount(len(fields)) + ", and this pattern binds " + countOf(len(bindings)) + ". Name every field or none — `_` is how one is skipped")
+		} else {
+			checkPatternType(c, subjectType, head, variant)
 		}
 		return
 	}
 	report(c, "`" + types.shownName(head) + "` has no variant `{variant}`")
+}
+
+proc checkPatternType(c: mut Check, subjectType: types.Ty, head: Str, variant: Str): void {
+	if subjectType is types.Ty.TUnknown || subjectType is types.Ty.TVar(_) {
+		return
+	}
+	if head == "Result" && subjectType is types.Ty.TResult(_, _) {
+		return
+	}
+	if subjectType is types.Ty.TNamed(name) && name == head {
+		return
+	}
+	shown := types.shownName(head)
+	report(c, "`{shown}.{variant}` matches a `{shown}`, and what it is matched against is " + types.show(subjectType))
 }
 
 func segment(path: Str[], index: Int): Str {
@@ -2369,9 +2394,29 @@ func terminatesWith(t: types.Table, s: ast.Stmt): Bool {
 		if hasElse {
 			return terminates(t, otherwise)
 		}
-		return covers(t, branches)
+		return cover.covers(t, branches)
 	}
 	return false
+}
+
+// A value the else-less chain ending `b` lets through, where that is why `b` does
+// not terminate.
+func missedAtEnd(t: types.Table, b: ast.Block): Str {
+	last := len(b.stmts) - 1
+	if b.stmts bounds last {
+		if b.stmts[last] is ast.Stmt.IfChain(branches, otherwise, hasElse) {
+			for each branch in branches {
+				if terminates(t, branch.body) == false {
+					return missedAtEnd(t, branch.body)
+				}
+			}
+			if hasElse {
+				return missedAtEnd(t, otherwise)
+			}
+			return cover.missed(t, branches)
+		}
+	}
+	return ""
 }
 
 func exitsTheProgram(value: ast.Expr): Bool {
@@ -2383,50 +2428,6 @@ func exitsTheProgram(value: ast.Expr): Bool {
 				}
 			}
 		}
-	}
-	return false
-}
-
-// Whether an else-less chain covers its subject's whole type: every variant of a
-// declared union, or a `Result`'s `Ok` and `Error`. Every branch has to test the
-// same subject — a chain that changed subject halfway covers neither.
-func covers(t: types.Table, branches: ast.Branch[]): Bool {
-	mut subject := ""
-	mut Str[dyn] variants = []
-	mut typeName := ""
-	for each b in branches {
-		if b.condition is ast.Expr.IsMatch(matched, pattern) {
-			name := rootName(matched)
-			if name == "" || (subject != "" && subject != name) {
-				return false
-			}
-			subject = name
-			if pattern is ast.Pattern.Constructor(path, _, _) {
-				head := segment(path, 0)
-				if typeName != "" && typeName != head {
-					return false
-				}
-				typeName = head
-				append(variants, segment(path, 1))
-			} else {
-				// No finite set of vector or string patterns covers every length
-				// or every string.
-				return false
-			}
-		} else {
-			return false
-		}
-	}
-	if typeName == "Result" {
-		return indexOf(variants, "Ok") is Result.Ok(_) && indexOf(variants, "Error") is Result.Ok(_)
-	}
-	if types.findType(t, typeName) is Result.Ok(info) {
-		for each v in info.variants {
-			if indexOf(variants, v.name) is Result.Error(_) {
-				return false
-			}
-		}
-		return len(info.variants) > 0
 	}
 	return false
 }

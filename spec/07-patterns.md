@@ -15,8 +15,9 @@ value is Type.Variant(a, b)
 value is Type.Variant          // a variant that carries nothing
 ```
 
-Fields are bound **by position**. `_` matches a field without binding it. A
-partially-written argument list is not allowed: name every field or none.
+Fields are bound **by position**. `_` matches a field without binding it, and a
+pattern or a literal in its place matches what it holds ([7.5](#75-patterns-inside-patterns)).
+A partially-written argument list is not allowed: name every field or none.
 
 ```hive
 if shape is Shape.Circle(r) {
@@ -57,7 +58,8 @@ v is ["a", x, ...rest]         // at least two; `rest` binds the leftovers
 ```
 
 Element positions are a **literal** to match (`"a"`, `3`, `#Atom`, `true`), a
-**name** to bind, or `_` to skip. A trailing `...rest` relaxes the length from an
+**name** to bind, `_` to skip, or a **pattern** of their own
+([7.5](#75-patterns-inside-patterns)). A trailing `...rest` relaxes the length from an
 exact count to a lower bound and binds the leftover elements as a vector. Without
 one, the pattern matches only a vector of exactly that length.
 
@@ -146,11 +148,46 @@ what follows it does not fit:
 Two templates that come to the same expression share the one compiled pattern,
 and a program that writes no string pattern links no matcher at all.
 
-## 7.5 Exhaustiveness
+## 7.5 Patterns inside patterns
 
-An else-less `if`/`else if` chain that covers its subject's whole type is a
-**terminating path** ([04](04-declarations.md#44-returning-on-every-path)), which
-is what lets a total function over a union be written without a dead `else`:
+A position that binds a name — a variant's field, a vector's element — may hold a
+pattern instead, and the whole is still one match:
+
+```hive
+if foo() is Result.Ok(Foo.Bar(["foo/{padding}/bar", ...rest])) {
+	echo "{padding}, then {len(rest)} more"
+}
+```
+
+**It is the chain it abbreviates**, and compiles to exactly that:
+
+```hive
+if foo() is Result.Ok(result) && result is Foo.Bar(values) && values is [head, ...rest] && head is "foo/{padding}/bar" {
+	echo "{padding}, then {len(rest)} more"
+}
+```
+
+Each part is bound to a name no program can write, and tested once the pattern
+around it has matched — an outer part before its own parts, siblings left to
+right. So every rule of a chain holds unchanged: the subject is evaluated once,
+the bindings are in scope for the rest of the condition and the branch body, and
+a `!` cannot negate one.
+
+* A part is a variant, vector or string pattern. A vector's `...rest` is still a
+  name, and so is a string pattern's hole.
+* A variant's position may also hold a **literal** the field has to equal, as a
+  vector's position may: `Result.Ok(3)`, `Pair.Of("bees", n)`.
+* **A pattern binds a name once.** Two parts bound to one name would leave the
+  first unreachable, so `Pair.Of(a, Result.Ok(a))` is a compile error.
+* **A variant pattern matches only its own type**, at any depth:
+  `Result.Ok(Foo.Bar)` against a `Result<Str, E>` is a compile error.
+
+## 7.6 Exhaustiveness
+
+An else-less `if`/`else if` chain whose branches take **every value of its
+subject** is a **terminating path**
+([04](04-declarations.md#44-returning-on-every-path)), which is what lets a total
+function over a union be written without a dead `else`:
 
 ```hive
 func describe(shape: Shape): Str {
@@ -160,12 +197,46 @@ func describe(shape: Shape): Str {
 }
 ```
 
-The subject's whole type means: every variant of a declared union, or a
-`Result`'s `Ok` and `Error`. Every branch of the chain must test the **same**
-subject. Vector and string patterns never make a chain exhaustive — no finite set
-of them covers every string or every length.
+**Coverage follows nesting.** A union is covered by its variants and a `Result`
+by `Ok` and `Error`, each as far down as the patterns go:
 
-## 7.6 Narrowing and scope
+```hive
+func kind(r: Result<Route, Str>): Str {
+	if r is Result.Ok(Route.Page([]))               { return "an empty page" }
+	else if r is Result.Ok(Route.Page([_, ...more])) { return "a page" }
+	else if r is Result.Ok(Route.Missing)            { return "a missing page" }
+	else if r is Result.Error(_)                     { return "no page at all" }
+}
+```
+
+* A **vector** is covered by its lengths: `[]` and `[first, ...rest]` take every
+  one. A `Bool` is covered by `true` and `false`.
+* **Numbers, atoms and strings have no finite cover.** A literal or a template
+  takes some of them and never all — the one exception being a template that is
+  a single open hole, `"{text}"`, which takes every string, the empty one
+  included.
+* A hand-written chain on a pattern's own bindings — `r is Result.Ok(page) && page
+  is Route.Missing` — covers what the nested pattern it spells out would, since
+  that is what a nested pattern is ([7.5](#75-patterns-inside-patterns)).
+* **A branch whose condition goes on past its pattern** —
+  `r is Result.Ok(n) && n > 0` — takes only part of what the pattern does, so it
+  covers nothing.
+* The subject is a variable, or a path of fields and indexes from one (`order`,
+  `order.status`, `rows[0]`). A call is not one, because it may answer
+  differently each time it is made. Branches may test different subjects, and the
+  chain terminates when its branches cover any one of them.
+
+A chain that falls short is reported with a value **no branch takes** — `kind`
+without its third branch says:
+
+```
+`kind` answers with Str, so every path through it has to return one, and no
+branch of the else-less `if` chain it ends with takes `r` when it is
+`Result.Ok(Route.Missing)`. Give that a branch of its own, or end the chain with
+an `else`
+```
+
+## 7.7 Narrowing and scope
 
 A binding introduced by `is` is:
 

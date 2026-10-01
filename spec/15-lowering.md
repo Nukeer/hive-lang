@@ -55,6 +55,7 @@ file, plus a generated `hive` runtime package.
 | a `hive.*` library call | a call of the same name on the generated `hive` runtime package (`hive.time.now` → `hive.TimeNow`) |
 | `T.decode(t, c)` / `T.Variant.decode(t, c)` | `hive.JsonParse(t, jsonDecode_T)` / `hive.JsonParse(t, jsonDecode_T_Variant)` — `c` names the format and is not itself evaluated |
 | `encode(v, c)` | `jsonEncode_T(v)` for a declared `T`, else the encoder for the scalar or vector it is — written at the call site from the format `c` names, never a runtime call |
+| `x is P(Q)` / `x is P(3)` | `x is P(t) && t is Q` / `x is P(t) && t == 3`, desugared by the parser with `t` a name no program can write — so the Go is the hand-written chain's, names aside |
 | `ui.row(..)`, or `web.httpServe(..)` after `import hive.net as web` | nothing — the short name is resolved during flattening, so the emitter only ever sees `hive.ui.row` and `hive.net.httpServe` |
 | `hive.map.Map<Str, Int>` | `hive.Dict[string, int]` — a key order beside a Go map |
 | `import ./util.go`, then `util.slugify(s)` | the file compiled as its own package, plus a wrapper `func util_0_slugify(s string) string { return ffi_util_1.Slugify(s) }`, with a copy around every value that owns storage |

@@ -36,11 +36,14 @@ type Parse {
 	// that did not work out is nobody's mistake.
 	quiet: Bool
 	errors: diag.Diagnostic[dyn]
+	// Carried into sub-parses too, so no two hidden names in a file meet.
+	parts: Int
+	tests: ast.Expr[dyn]
 }
 
 // Parse a whole file.
 proc parse(ts: token.Token[]): Parsed {
-	mut Parse p = Parse(0, false, false, [])
+	mut Parse p = Parse(0, false, false, [], 0, [])
 	mut ast.ImportLine[dyn] imports = []
 	mut ast.Decl[dyn] decls = []
 
@@ -404,8 +407,9 @@ proc parseSqlExpr(source: Str, p: mut Parse): ast.Expr {
 	for each e in lexed.errors {
 		append(p.errors, e)
 	}
-	mut Parse inner = Parse(0, false, false, [])
+	mut Parse inner = Parse(0, false, false, [], p.parts, [])
 	written := parseExpr(lexed.tokens, inner)
+	p.parts = inner.parts
 	for each e in inner.errors {
 		append(p.errors, e)
 	}
@@ -1315,7 +1319,7 @@ proc parseIs(ts: token.Token[], p: mut Parse): ast.Expr {
 	k := kindAt(ts, p.pos)
 	if k == token.Kind.KwIs() {
 		advance(p)
-		return ast.Expr.IsMatch(left, parsePattern(ts, p))
+		return parseMatch(ts, p, left)
 	}
 	// `vector bounds index` is sugar for `index >= 0 && index < hive.len(vector)`.
 	// Desugaring here means the emitter and the bounds pass understand it for
@@ -1744,8 +1748,9 @@ proc parseSubExpr(ts: token.Token[], p: mut Parse, source: Str, line: Int): ast.
 		reportSub(ts, p, line, source, "does not lex")
 		return ast.Expr.Absent()
 	}
-	mut Parse inner = Parse(0, false, false, [])
+	mut Parse inner = Parse(0, false, false, [], p.parts, [])
 	value := parseExpr(lexed.tokens, inner)
+	p.parts = inner.parts
 	if inner.failed || kindAt(lexed.tokens, inner.pos) != token.Kind.Eof() {
 		reportSub(ts, p, line, source, "is not one expression")
 		return ast.Expr.Absent()
@@ -1761,6 +1766,121 @@ proc reportSub(ts: token.Token[], p: mut Parse, line: Int, source: Str, why: Str
 }
 
 // --- Patterns ----------------------------------------------------------------
+
+// `x is P(Q)` is `x is P(t) && t is Q`, with `t` a name no program can write, so
+// nothing after the parser has a nested pattern to know about.
+proc parseMatch(ts: token.Token[], p: mut Parse, subject: ast.Expr): ast.Expr {
+	held := p.tests
+	p.tests = []
+	pattern := parsePattern(ts, p)
+	mut ast.Expr out = ast.Expr.IsMatch(subject, pattern)
+	mut Str[dyn] bound = boundBy(pattern)
+	for each step in p.tests {
+		out = ast.Expr.Binary(ast.BinOp.And(), out, step)
+		if step is ast.Expr.IsMatch(_, inner) {
+			bound = bound + boundBy(inner)
+		}
+	}
+	p.tests = held
+	refuseRebinding(ts, p, bound)
+	return out
+}
+
+// Filed before the part is read, so an outer part is tested before its own parts.
+proc nestedPart(ts: token.Token[], p: mut Parse): Str {
+	name := freshPart(p)
+	at := len(p.tests)
+	append(p.tests, ast.Expr.Absent())
+	step := ast.Expr.IsMatch(ast.Expr.Ident(name), parsePattern(ts, p))
+	if p.tests bounds at {
+		p.tests[at] = step
+	}
+	return name
+}
+
+proc literalPart(ts: token.Token[], p: mut Parse): Str {
+	name := freshPart(p)
+	append(p.tests, ast.Expr.Binary(ast.BinOp.Eq(), ast.Expr.Ident(name), parseLiteral(ts, p)))
+	return name
+}
+
+// No binding and no emitter temporary holds a `_` past its first character.
+proc freshPart(p: mut Parse): Str {
+	name := "_part_{p.parts}"
+	p.parts = p.parts + 1
+	return name
+}
+
+func opensPattern(ts: token.Token[], i: Int): Bool {
+	k := kindAt(ts, i)
+	if k is token.Kind.StrParts(_) || k == token.Kind.LBracket() {
+		return true
+	}
+	return wordAt(ts, i) != "" && kindAt(ts, i + 1) == token.Kind.Dot()
+}
+
+func startsLiteral(ts: token.Token[], i: Int): Bool {
+	k := kindAt(ts, i)
+	return k is token.Kind.IntLit(_) || k is token.Kind.FloatLit(_) || k is token.Kind.StrLit(_)
+		|| k is token.Kind.AtomLit(_) || k == token.Kind.KwTrue() || k == token.Kind.KwFalse()
+		|| k == token.Kind.Minus()
+}
+
+proc parseLiteral(ts: token.Token[], p: mut Parse): ast.Expr {
+	k := kindAt(ts, p.pos)
+	advance(p)
+	if k is token.Kind.IntLit(v) { return ast.Expr.IntLit(v) }
+	else if k is token.Kind.FloatLit(v) { return ast.Expr.FloatLit(v) }
+	else if k is token.Kind.StrLit(t) { return ast.Expr.StrLit(t) }
+	else if k is token.Kind.AtomLit(atom) { return ast.Expr.AtomLit(atom) }
+	else if k == token.Kind.KwTrue() { return ast.Expr.BoolLit(true) }
+	else if k == token.Kind.KwFalse() { return ast.Expr.BoolLit(false) }
+	if kindAt(ts, p.pos) is token.Kind.IntLit(v) {
+		advance(p)
+		return ast.Expr.Negate(ast.Expr.IntLit(v))
+	}
+	expected(ts, p, "a number after `-` in a pattern")
+	return ast.Expr.Absent()
+}
+
+func boundBy(pattern: ast.Pattern): Str[dyn] {
+	mut Str[dyn] out = []
+	if pattern is ast.Pattern.Constructor(_, bindings, _) {
+		for each b in bindings {
+			append(out, b)
+		}
+	} else if pattern is ast.Pattern.VectorPat(elements, rest) {
+		for each element in elements {
+			if element is ast.VecElem.Bind(name) {
+				append(out, name)
+			}
+		}
+		append(out, rest)
+	} else if pattern is ast.Pattern.StrTemplate(parts) {
+		for each part in parts {
+			if part is token.StrPart.Code(source) {
+				append(out, text.trim(source))
+			} else if part is token.StrPart.Hole(name, _) {
+				append(out, name)
+			}
+		}
+	}
+	return out
+}
+
+proc refuseRebinding(ts: token.Token[], p: mut Parse, bound: Str[]): void {
+	mut Str[dyn] seen = []
+	for each name in bound {
+		if name == "" || name == "_" {
+			continue
+		}
+		if indexOf(seen, name) is Result.Ok(_) {
+			fail(ts, p, "this pattern binds `{name}` twice, and the two would take different parts of the value. Give them different names")
+			return
+		}
+		append(seen, name)
+	}
+}
 
 proc parsePattern(ts: token.Token[], p: mut Parse): ast.Pattern {
 	k := kindAt(ts, p.pos)
@@ -1913,27 +2033,24 @@ proc parseVectorPattern(ts: token.Token[], p: mut Parse): ast.Pattern {
 	return ast.Pattern.VectorPat(elements, rest)
 }
 
-// One position: a literal the element has to equal, a name to bind it to, or `_`
-// to skip it.
 proc parseVecElem(ts: token.Token[], p: mut Parse): ast.VecElem {
-	k := kindAt(ts, p.pos)
-	if k is token.Kind.IntLit(v) { advance(p) return ast.VecElem.Match(ast.Expr.IntLit(v)) }
-	else if k is token.Kind.FloatLit(v) { advance(p) return ast.VecElem.Match(ast.Expr.FloatLit(v)) }
-	else if k is token.Kind.StrLit(t) { advance(p) return ast.VecElem.Match(ast.Expr.StrLit(t)) }
-	else if k is token.Kind.AtomLit(atom) { advance(p) return ast.VecElem.Match(ast.Expr.AtomLit(atom)) }
-	else if k == token.Kind.KwTrue() { advance(p) return ast.VecElem.Match(ast.Expr.BoolLit(true)) }
-	else if k == token.Kind.KwFalse() { advance(p) return ast.VecElem.Match(ast.Expr.BoolLit(false)) }
-	else if k == token.Kind.Minus() {
-		advance(p)
-		inner := kindAt(ts, p.pos)
-		if inner is token.Kind.IntLit(v) {
-			advance(p)
-			return ast.VecElem.Match(ast.Expr.Negate(ast.Expr.IntLit(v)))
-		}
-		expected(ts, p, "a number after `-` in a vector pattern")
-		return ast.VecElem.Bind("_")
+	if opensPattern(ts, p.pos) {
+		return ast.VecElem.Bind(nestedPart(ts, p))
+	}
+	if startsLiteral(ts, p.pos) {
+		return ast.VecElem.Match(parseLiteral(ts, p))
 	}
 	return ast.VecElem.Bind(expectIdent(ts, p, naming.Role.Binding()))
+}
+
+proc parsePatternArg(ts: token.Token[], p: mut Parse): Str {
+	if opensPattern(ts, p.pos) {
+		return nestedPart(ts, p)
+	}
+	if startsLiteral(ts, p.pos) {
+		return literalPart(ts, p)
+	}
+	return expectIdent(ts, p, naming.Role.Binding())
 }
 
 // `Result.Ok(v)`, `Shape.Circle(r, _)`, `text.Align.Left`.
@@ -1966,7 +2083,7 @@ proc parseConstructorPattern(ts: token.Token[], p: mut Parse): ast.Pattern {
 			advance(p)
 			return ast.Pattern.Constructor(path, bindings, true)
 		}
-		append(bindings, expectIdent(ts, p, naming.Role.Binding()))
+		append(bindings, parsePatternArg(ts, p))
 		if kindAt(ts, p.pos) == token.Kind.Comma() {
 			advance(p)
 		} else if kindAt(ts, p.pos) != token.Kind.RParen() && p.failed == false {

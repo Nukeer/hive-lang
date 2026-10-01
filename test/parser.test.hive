@@ -498,6 +498,48 @@ test "a string pattern is a template of literal text and binding holes" {
 	assert stmt("if p is \"/users/\{id}/posts/\{postId}\" \{ }") == "(if (is p (template \"/users/\" <id> \"/posts/\" <postId>)) (block))"
 }
 
+test "a nested pattern is the chain of matches it abbreviates" {
+	got := stmt("if r is Result.Ok(Foo.Bar([\"foo/\{p}/bar\", ...rest])) \{ }")
+	assert got == "(if (&& (&& (&& (is r Result.Ok(_part_0)) (is _part_0 Foo.Bar(_part_1))) (is _part_1 [_part_2 ...rest])) (is _part_2 (template \"foo/\" <p> \"/bar\"))) (block))"
+	chain := stmt("if r is Result.Ok(inner) && inner is Foo.Bar(v) \{ }")
+	assert stmt("if r is Result.Ok(Foo.Bar(v)) \{ }") == text.replace(chain, "inner", "_part_0")
+}
+
+test "an outer part is tested before its own parts, and siblings in order" {
+	got := stmt("if p is Pair.Of(Result.Ok(Shape.Point), Result.Error(e)) \{ }")
+	assert got == "(if (&& (&& (&& (is p Pair.Of(_part_0 _part_2)) (is _part_0 Result.Ok(_part_1))) (is _part_1 Shape.Point)) (is _part_2 Result.Error(e))) (block))"
+}
+
+test "a variant's position may hold a literal, as a vector's does" {
+	assert stmt("if r is Result.Ok(3) \{ }") == "(if (&& (is r Result.Ok(_part_0)) (== _part_0 3)) (block))"
+	assert stmt("if r is Result.Ok(-1) \{ }") == "(if (&& (is r Result.Ok(_part_0)) (== _part_0 (- 1))) (block))"
+	assert stmt("if r is Result.Error(\"gone\") \{ }") == "(if (&& (is r Result.Error(_part_0)) (== _part_0 \"gone\")) (block))"
+	assert stmt("if v is [3, x] \{ }") == "(if (is v [3 x]) (block))"
+}
+
+test "a vector's position may hold a pattern of its own" {
+	got := stmt("if v is [Shape.Point, \"a\{x}\", [y]] \{ }")
+	assert got == "(if (&& (&& (&& (is v [_part_0 _part_1 _part_2]) (is _part_0 Shape.Point)) (is _part_1 (template \"a\" <x>))) (is _part_2 [y])) (block))"
+}
+
+test "hidden names keep counting through an interpolation" {
+	got := tree("proc p(): void \{ if r is Result.Ok(Shape.Point) \{ echo \"\{r is Result.Ok(Shape.Point)}\" } }")
+	assert text.contains(got, "(is _part_0 Shape.Point)")
+	assert text.contains(got, "(is _part_1 Shape.Point)")
+}
+
+test "one pattern may not bind a name twice" {
+	got := problem("proc p(): void \{ if x is Pair.Of(a, Result.Ok(a)) \{ } }")
+	assert text.startsWith(got, "this pattern binds `a` twice")
+	assert text.startsWith(problem("proc p(): void \{ if v is [a, ...a] \{ } }"), "this pattern binds `a` twice")
+	assert problemCount("proc p(): void \{ if x is Pair.Of(_, Result.Ok(_)) \{ } }") == 0
+}
+
+test "a nested match cannot be negated either" {
+	got := problem("proc p(): void \{ if !(r is Result.Ok(Shape.Point)) \{ } }")
+	assert text.startsWith(got, "a match cannot be negated")
+}
+
 test "a hole that is not a plain name is refused" {
 	got := problem("proc p(): void \{ if s is \"/x/\{a + b}\" \{ } }")
 	assert text.startsWith(got, "a string pattern's `\{a + b}` has to be a plain name")

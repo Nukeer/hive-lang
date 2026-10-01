@@ -65,7 +65,7 @@ func index(): Str {
 		| [declarations](declarations.md) | ~BT~type~BT~ ~BT~func~BT~ ~BT~proc~BT~ ~BT~query~BT~ ~BT~test~BT~, and returning on every path |
 		| [expressions](expressions.md) | operators, precedence, calls, named arguments, function values |
 		| [statements](statements.md) | bindings, assignment, ~BT~if~BT~, loops, ~BT~echo~BT~ / ~BT~assert~BT~ / ~BT~panic~BT~ |
-		| [patterns](patterns.md) | ~BT~is~BT~, its four pattern kinds, narrowing, exhaustiveness |
+		| [patterns](patterns.md) | ~BT~is~BT~, its four pattern kinds, nesting them, narrowing, exhaustiveness |
 		| [mutability](mutability.md) | ~BT~mut~BT~, mutex parameters, why a binding sometimes copies |
 		| [concurrency](concurrency.md) | ~BT~async~BT~, the await-all, ~BT~with timeout~BT~ |
 		| [bounds](bounds.md) | how every index and slice is proved in range |
@@ -530,8 +530,10 @@ func declarations(): Str {
 		* ~BT~panic~BT~, or a call to ~BT~hive.term.exit~BT~ — both handy for a tail you know
 		  is unreachable (an ~BT~assert~BT~ that holds carries on, so it does not count);
 		* an ~BT~if~BT~/~BT~else~BT~ whose every branch terminates; or
-		* an **else-less** ~BT~if~BT~/~BT~else if~BT~ chain that covers its subject's whole type — a
-		  ~BT~Result~BT~'s ~BT~Ok~BT~ and ~BT~Error~BT~, or every variant of a declared union.
+		* an **else-less** ~BT~if~BT~/~BT~else if~BT~ chain whose every branch terminates and whose
+		  patterns take every value of its subject — a ~BT~Result~BT~'s ~BT~Ok~BT~ and ~BT~Error~BT~,
+		  every variant of a declared union, nested as deep as they go
+		  ([patterns](patterns.md)).
 
 		~CODE~hive
 		func describe(shape: Shape): Str \{
@@ -937,7 +939,8 @@ func patterns(): Str {
 		}
 		~CODE~
 
-		Fields are bound **by position**; ~BT~_~BT~ matches one without binding it. A partly
+		Fields are bound **by position**; ~BT~_~BT~ matches one without binding it, and a
+		pattern or a literal in its place matches what it holds (see below). A partly
 		written argument list is not allowed: **name every field or none**. An imported
 		type is matched through the name its module is reached by
 		(~BT~style is text.Align.Left~BT~).
@@ -957,7 +960,7 @@ func patterns(): Str {
 		~CODE~
 
 		Each position is a **literal** to match (~BT~"a"~BT~, ~BT~3~BT~, ~BT~#Atom~BT~, ~BT~true~BT~), a **name**
-		to bind, or ~BT~_~BT~ to skip. A trailing ~BT~...rest~BT~ relaxes the length from an exact
+		to bind, ~BT~_~BT~ to skip, or a **pattern** of its own. A trailing ~BT~...rest~BT~ relaxes the length from an exact
 		count to a lower bound; without one, the pattern matches only a vector of
 		exactly that length.
 
@@ -998,11 +1001,33 @@ func patterns(): Str {
 		A group inside a hole groups and does not capture — the hole is already the
 		binding — and a named group is a compile error for the same reason.
 
+		## Patterns inside patterns
+
+		A position that binds a name — a variant's field, a vector's element — may hold a
+		pattern instead, and the whole is still one match:
+
+		~CODE~hive
+		if foo() is Result.Ok(Foo.Bar(["foo/\{padding}/bar", ...rest])) \{ }
+
+		// exactly this, compiled the same way:
+		if foo() is Result.Ok(result) && result is Foo.Bar(values) && values is [head, ...rest] && head is "foo/\{padding}/bar" \{ }
+		~CODE~
+
+		Each part is bound to a name no program can write and tested once the pattern
+		around it matched, outer parts first, so every rule of a chain holds: the subject
+		is evaluated once, the bindings reach the rest of the condition and the body, and
+		~BT~!~BT~ cannot negate one.
+
+		* A variant's position may also hold a **literal** it has to equal:
+		  ~BT~Result.Ok(3)~BT~, ~BT~Pair.Of("bees", n)~BT~.
+		* **A pattern binds a name once**: ~BT~Pair.Of(a, Result.Ok(a))~BT~ is a compile error.
+		* **A variant pattern matches only its own type**, at any depth.
+
 		## Exhaustiveness
 
-		An **else-less** ~BT~if~BT~/~BT~else if~BT~ chain that covers its subject's whole type is a
-		terminating path, which is what lets a total function over a union be written
-		without a dead ~BT~else~BT~:
+		An **else-less** ~BT~if~BT~/~BT~else if~BT~ chain whose branches take every value of its
+		subject is a terminating path, which is what lets a total function over a union
+		be written without a dead ~BT~else~BT~:
 
 		~CODE~hive
 		func describe(shape: Shape): Str \{
@@ -1012,10 +1037,20 @@ func patterns(): Str {
 		}
 		~CODE~
 
-		The whole type means every variant of a declared union, or a ~BT~Result~BT~'s ~BT~Ok~BT~ and
-		~BT~Error~BT~. Every branch must test the **same** subject. **Vector and string
-		patterns never make a chain exhaustive** — no finite set of them covers every
-		string or every length.
+		* **Coverage follows nesting**: ~BT~Result.Ok(Foo.Bar(_))~BT~, ~BT~Result.Ok(Foo.Baz)~BT~ and
+		  ~BT~Result.Error(_)~BT~ take every ~BT~Result<Foo, E>~BT~. A hand-written chain on the
+		  pattern's own bindings counts the same, since that is what a nested pattern is.
+		* A **vector** is covered by length — ~BT~[]~BT~ and ~BT~[x, ...rest]~BT~ take every one — and
+		  a ~BT~Bool~BT~ by ~BT~true~BT~ and ~BT~false~BT~. Numbers, atoms and strings have no finite
+		  cover; only a template that is one open hole, ~BT~"\{s}"~BT~, takes every string.
+		* The subject is a variable, or a path of fields and indexes from one; a call is
+		  not, since it may answer differently each time. A chain may cover any one of
+		  the subjects its branches open by matching.
+		* **A branch whose condition goes on past its pattern** — ~BT~r is Result.Ok(n) && n > 0~BT~
+		  — takes only part of what the pattern does, so it covers nothing.
+
+		When a chain falls short, the error names a value no branch takes: ~BT~r~BT~ when it
+		is ~BT~Result.Ok(Foo.Baz)~BT~.
 
 		## Narrowing and scope
 
