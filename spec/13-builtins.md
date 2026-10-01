@@ -132,6 +132,10 @@ Shadowing is **per module**: another module's declarations are only ever reached
 through its alias, so a `map` declared in one file leaves every other file's bare
 `map` alone.
 
+The standard library's module names — `conv`, `task`, `ui` and the rest — are held
+the same way, and also give way to an import of the same name
+([12](12-modules.md#126-the-standard-library)).
+
 Two things follow from the builtin being a distinct thing rather than a fallback.
 Only the builtin `append` requires a `mut` target — a declared `append` is an
 ordinary callable whose first argument is nothing special. And only the builtin

@@ -22,7 +22,7 @@ The path itself says which:
 | `import ./lib/text` | a Hive file on this disk — `.hive` is never written |
 | `import ./lib/util.go` | a [Go file](#124-importing-a-go-file) on this disk — `.go` always is |
 | `import https://host/owner/repo/src/foo` | a file in a [git repository](#125-importing-from-a-git-repository) |
-| `import hive.ui` | a [standard library module](#126-importing-a-standard-library-module), which names no file |
+| `import hive.ui` | a [standard library module](#importing-one), which names no file |
 
 The two extensions are opposites on purpose. A Hive module's is never written,
 because the path names a *module* and the file is only where it lives; a Go
@@ -166,23 +166,47 @@ import https://github.com/owner/repo/go/util.go as helpers  // a Go file, same r
   revision that does not exist and a path the repository does not have are four
   different errors, and each says which it is.
 
-## 12.6 Importing a standard library module
+## 12.6 The standard library
+
+**Every module answers to its own name, with no import.** `task.sleep(10)`,
+`conv.sti(text)` and a `ui.View` parameter are `hive.task.sleep(10)`,
+`hive.conv.sti(text)` and a `hive.ui.View` one, written short.
+
+That name is held the way a builtin's is
+([13](13-builtins.md#a-declaration-of-your-own-wins)): **anything of the
+module's own comes first** — a `func`, `proc`, `query` or type it declares, an
+import named that way, a local or a parameter — and `hive.<module>` reaches the
+library whatever was declared.
 
 ```hive
-import hive.ui
+import ./lib/clock as time
+
+proc main(): void {
+	echo time.now()         // lib/clock's
+	echo hive.time.now()    // the library's
+	task.sleep(10)          // the library's: nothing here is named `task`
+}
+```
+
+Shadowing is per module, as it is for a builtin: a `time` declared in one file
+leaves every other file's `time.now()` alone.
+
+### Importing one
+
+```hive
 import hive.net as web
 ```
 
-It is the same feature and the same rules — the alias is a name like any other.
-Three things are particular to it:
+It is the same feature and the same rules as any import — the alias is a name like
+any other. Three things are particular to it:
 
 * The path is the module and nothing else: `import hive.ui`, never
   `import hive.ui.View`. A path naming something inside a module is refused as
   that, and a module this compiler does not carry — `import hive.jsno` — is
   refused at the import rather than at every use of its alias.
 * Without `as`, the name is the module's own last segment.
-* **Nothing is imported into the program.** The alias is a *spelling*: `ui.row`
-  and `hive.ui.row` are the same call, both are always available, and neither
+* **Nothing is imported into the program.** The alias is a *spelling*:
+  `web.httpServe` and `hive.net.httpServe` are the same call, and neither
   changes what is linked into the build. `import hive` is not a thing to write —
   the library is reached a module at a time, and the global builtins were never
   behind an import at all.

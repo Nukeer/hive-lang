@@ -60,6 +60,18 @@ test "a field a type does not have is named" {
 	assert got == "in `main`: `User` has no field `nope`"
 }
 
+test "a value that is not a declared type has no fields at all" {
+	assert problem(inMain("n := 3  echo n.size")) == "in `main`: `Int` has no field `size`"
+	assert problem(inMain("v := [\"a\"]  echo v.first")) == "in `main`: `Str[1]` has no field `first`"
+	assert problem("func two(): Int \{ return 2 }\nproc main(): void \{ echo two.value }") == "in `main`: `func(): Int` has no field `value`"
+}
+
+test "a library module's name the program took for itself is not the module" {
+	assert problem(inMain("json := 3  echo json.codec()")) == "in `main`: `Int` has no field `codec`: this `json` is the program's own, and the library module is `hive.json`"
+	assert opens(problem("func time(): Int \{ return 1 }\nproc main(): void \{ echo time.now() }"), "in `main`: `func(): Int` has no field `now`: this `time`")
+	assert problemCount("func time(): Int \{ return 1 }\nproc main(): void \{ echo hive.time.now()  task.sleep(1) }") == 0
+}
+
 test "a variant a type does not have is named" {
 	got := problem("type Shape \{ Circle \{ radius: Int } }\nproc main(): void \{ echo Shape.Square(1) }")
 	assert got == "in `main`: `Shape` has no variant `Square`"
