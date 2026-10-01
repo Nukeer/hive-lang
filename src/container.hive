@@ -255,8 +255,8 @@ proc walkExprTail(found: mut Found, e: ast.Expr): void {
 }
 
 // The calls that open a port, and the ones that open a database. Spelled
-// `hive.<module>.<name>` however the source spelled it: the loader writes an
-// import's alias back out in full, so this has one spelling to know.
+// `hive.<module>.<name>` however the source spelled it: the loader writes a
+// short name back out in full, so this has one spelling to know.
 proc serving(found: mut Found, callee: ast.Expr, args: ast.Arg[]): void {
 	name := libCall(callee)
 	if name == "hive.net.httpServe" || name == "hive.net.wsServe"

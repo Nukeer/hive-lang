@@ -55,7 +55,7 @@ file, plus a generated `hive` runtime package.
 | a `hive.*` library call | a call of the same name on the generated `hive` runtime package (`hive.time.now` → `hive.TimeNow`) |
 | `T.decode(t, c)` / `T.Variant.decode(t, c)` | `hive.JsonParse(t, jsonDecode_T)` / `hive.JsonParse(t, jsonDecode_T_Variant)` — `c` names the format and is not itself evaluated |
 | `encode(v, c)` | `jsonEncode_T(v)` for a declared `T`, else the encoder for the scalar or vector it is — written at the call site from the format `c` names, never a runtime call |
-| `import hive.ui as ui`, then `ui.row(..)` | nothing — the alias is resolved during flattening, so the emitter only ever sees `hive.ui.row` |
+| `ui.row(..)`, or `web.httpServe(..)` after `import hive.net as web` | nothing — the short name is resolved during flattening, so the emitter only ever sees `hive.ui.row` and `hive.net.httpServe` |
 | `hive.map.Map<Str, Int>` | `hive.Dict[string, int]` — a key order beside a Go map |
 | `import ./util.go`, then `util.slugify(s)` | the file compiled as its own package, plus a wrapper `func util_0_slugify(s string) string { return ffi_util_1.Slugify(s) }`, with a copy around every value that owns storage |
 | `Msg.Changed(_)` (a constructor hole) | `func(_h0 string) Msg { return Msg(MsgChanged{Text: _h0}) }` |

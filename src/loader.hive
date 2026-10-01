@@ -429,7 +429,7 @@ type Rw {
 	entryKey: Str
 	// Import alias -> the key of the module it names.
 	aliasKeys: hive.map.Map<Str, Str>
-	// Import alias -> the standard library module it stands for. Rewritten back
+	// Short name -> the standard library module it stands for. Rewritten back
 	// to its qualified spelling rather than resolved to a declaration: the
 	// standard library is named in the program, not flattened into it.
 	stdlibAliases: hive.map.Map<Str, Str>
@@ -461,6 +461,12 @@ proc bindImports(rw: mut Rw, src: Source, known: hive.map.Map<Str, Bool>): void 
 			}
 		}
 		append(rw.errors, diag.at(line.line, "could not resolve `import {line.path}`"))
+	}
+	for each module in stdlib.modules() {
+		if hive.map.has(rw.aliasKeys, module) == false && hive.map.has(rw.stdlibAliases, module) == false
+			&& ownFlat(rw, module) == "" {
+			hive.map.set(rw.stdlibAliases, module, module)
+		}
 	}
 }
 

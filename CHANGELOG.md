@@ -2,6 +2,10 @@
 
 ## v0.2.11
 
+### Language
+
+* **Every standard library module answers to its own name, with no import**: `task.sleep(10)`, `conv.sti(text)` and a `ui.View` parameter are `hive.task.sleep(10)`, `hive.conv.sti(text)` and `hive.ui.View`. The name is held the way a builtin's is — a declaration, an import, a local or a parameter of the same name comes first, per module — and `hive.<module>` reaches the library whatever was declared. `import hive.net as web` still gives a module another name.
+
 ### Standard library
 
 * **On Windows and Linux the program draws a `hive.ui.window` itself**, with no browser. Every widget but `scene` and `inset` has a version of its own — every kind of `input`, `textarea`, `checkbox`, `select` with its list, `table` with its sticky header, `canvas`, `image`, `spinner`, dialogs and pinned overlays, and a `hint` as a tooltip — laid out by the stylesheet's own rules, light or dark as the desktop is, scaled for the display, and still built with no C compiler. Windows sets its text in Segoe UI; Linux speaks X11 (XWayland on a Wayland desktop) and reads the system's own fonts itself — TrueType, CFF and variable ones, bold from a variable font's own weight axis. A window with a scene, a program shipping `assets/font.woff2`, `HIVE_WINDOW=print`, a Linux machine with no display or no usable font, macOS and Android keep the page. The layout is modelled on [Clay](https://github.com/nicbarker/clay) by Nic Barker.
@@ -12,6 +16,10 @@
 ### Examples
 
 * **`23-every-widget`**: every `hive.ui` widget but the 3D ones, with every attribute and event among them, in one window.
+
+### Fixes
+
+* **A member of a value that has no fields is refused here**, where `n.size` on an `Int`, a field of a vector, a `Result`, a map, an address or a function reached the Go toolchain. A library module's name the program took for itself says so: `json := 3` then `json.codec()` names `hive.json`.
 
 ## v0.2.10
 

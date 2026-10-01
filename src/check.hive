@@ -1173,7 +1173,25 @@ proc checkMember(c: mut Check, env: infer.Env, subject: ast.Expr, field: Str): v
 		} else if variantOnly(env.table, name, field) != "" {
 			report(c, unsharedField(env.table, name, field))
 		}
+	} else if hasNoFields(ty) {
+		report(c, "`" + types.show(ty) + "` has no field `{field}`" + shadowedModule(subject))
 	}
+}
+
+func hasNoFields(ty: types.Ty): Bool {
+	return ty is types.Ty.TStr || ty is types.Ty.TInt || ty is types.Ty.TFloat
+		|| ty is types.Ty.TBool || ty is types.Ty.TAtom || ty is types.Ty.TAddress
+		|| ty is types.Ty.TFn(_, _, _, _) || ty is types.Ty.TVec(_, _)
+		|| ty is types.Ty.TResult(_, _) || ty is types.Ty.TMap(_, _)
+}
+
+func shadowedModule(subject: ast.Expr): Str {
+	if subject is ast.Expr.Ident(name) {
+		if stdlib.isKnownModule(name) {
+			return ": this `{name}` is the program's own, and the library module is `hive.{name}`"
+		}
+	}
+	return ""
 }
 
 func isUnion(t: types.Table, ty: types.Ty): Bool {

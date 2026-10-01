@@ -141,6 +141,42 @@ test "every spelling of a library type is the one type" {
 	assert text.contains(long, "hive_json_JsonValue")
 }
 
+test "a library module answers to its own name with no import" {
+	assert tree("main.hive", "proc main(): void \{ task.sleep(1)  echo conv.its(2) }") == tree("main.hive", "proc main(): void \{ hive.task.sleep(1)  echo hive.conv.its(2) }")
+	long := tree("main.hive", "func f(v: hive.json.JsonValue): Bool \{ return v is hive.json.JsonValue.Int(_) }")
+	short := tree("main.hive", "func f(v: json.JsonValue): Bool \{ return v is json.JsonValue.Int(_) }")
+	assert long == short
+	assert tree("main.hive", "func f(m: map.Map<Str, Int>): Int \{ return 1 }") == tree("main.hive", "func f(m: hive.map.Map<Str, Int>): Int \{ return 1 }")
+}
+
+test "a declaration of the module's own takes the name, and hive still reaches the library" {
+	got := tree("main.hive", "func time(): Int \{ return 1 }\nproc main(): void \{ echo time.now()  echo hive.time.now() }")
+	assert text.contains(got, "(echo (call (. time now)))")
+	assert text.contains(got, "(echo (call (. (. hive time) now)))")
+}
+
+test "a local or a parameter takes it too" {
+	got := tree("main.hive", "func f(math: Int): Int \{ return math.abs }\nproc main(): void \{ conv := 1  echo conv.its  echo hive.conv.its(2) }")
+	assert text.contains(got, "(return (. math abs))")
+	assert text.contains(got, "(echo (. conv its))")
+	assert text.contains(got, "(call (. (. hive conv) its) 2)")
+}
+
+test "an import takes it, whatever it names" {
+	put("lib/clock.hive", "func now(): Int \{ return 7 }")
+	ours := put("ownClock.hive", "import ./lib/clock as time\nproc main(): void \{ echo time.now() }")
+	assert text.contains(treeOfFile(ours), "(call clock_0_now)")
+	missing := put("missingClock.hive", "import ./lib/clock as time\nproc main(): void \{ echo time.format(1, \"%Y\") }")
+	assert errorOfFile(missing) == "the module imported as `time` has no `format`"
+	assert text.contains(tree("main.hive", "import hive.net as time\nproc main(): void \{ echo time.resolve(n) }"), "(. (. hive net) resolve)")
+}
+
+test "another module's use of the name is not captured by the entrypoint's declaration of it" {
+	put("lib/stamps.hive", "func stamp(): Int \{ return time.now() }")
+	entry := put("stampCapture.hive", "import ./lib/stamps\nfunc time(): Int \{ return 1 }\nproc main(): void \{ echo stamps.stamp() }")
+	assert text.contains(treeOfFile(entry), "(func stamps_0_stamp () Int (block (return (call (. (. hive time) now)))))")
+}
+
 // --- Several files -----------------------------------------------------------
 
 test "an imported declaration is renamed, and every reference with it" {

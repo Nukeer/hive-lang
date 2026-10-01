@@ -43,8 +43,10 @@ func index(): Str {
 	return page.backticked(`
 		# The standard library
 
-		Reached as ~BT~hive.<module>.<name>~BT~, from anywhere, with no import.
-		~BT~import hive.net as web~BT~ only gives the module a shorter **spelling** —
+		Reached as ~BT~hive.<module>.<name>~BT~, from anywhere, with no import — or as
+		~BT~<module>.<name>~BT~, ~BT~net.httpRequest~BT~, wherever the program has not taken
+		that name for something of its own ([modules](../modules.md)).
+		~BT~import hive.net as web~BT~ only gives the module another **spelling** —
 		~BT~web.httpRequest~BT~ and ~BT~hive.net.httpRequest~BT~ are the same call, and neither
 		changes what is linked.
 
@@ -236,9 +238,9 @@ func maps(): Str {
 		  as a vector of a type declared for them. The one exception is a
 		  [~BT~JsonValue~BT~](json.md) object's properties, whose codec is the document itself.
 
-		~BT~import hive.map~BT~ names the module ~BT~map~BT~, which **coexists with the
-		~BT~map(v, f)~BT~ builtin**: a call on the name is the module and a bare call is the
-		builtin, and the two are told apart by shape.
+		The module's name ~BT~map~BT~ **coexists with the ~BT~map(v, f)~BT~ builtin**: a call
+		on the name is the module and a bare call is the builtin, and the two are told
+		apart by shape.
 	`)
 }
 

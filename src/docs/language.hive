@@ -70,7 +70,7 @@ func index(): Str {
 		| [concurrency](concurrency.md) | ~BT~async~BT~, the await-all, ~BT~with timeout~BT~ |
 		| [bounds](bounds.md) | how every index and slice is proved in range |
 		| [generics](generics.md) | type variables and monomorphization |
-		| [modules](modules.md) | ~BT~import~BT~, the four path kinds, importing Go |
+		| [modules](modules.md) | ~BT~import~BT~, the four path kinds, importing Go, the library's short names |
 		| [builtins](builtins.md) | the functions that need no import |
 		| [tables](tables.md) | CSV, spreadsheets, and the ~BT~Table~BT~ type |
 		| [queries](queries.md) | ~BT~query~BT~ declarations and the SQL in them |
@@ -738,7 +738,7 @@ func expressions(): Str {
 
 		## Member access, indexing, slicing
 
-		~BT~x.field~BT~ reads a field; ~BT~x.member~BT~ reads through an import alias, the two told
+		~BT~x.field~BT~ reads a field; ~BT~x.member~BT~ reads through an import alias or a library module's name, the two told
 		apart by what the left side names. ~BT~v[i]~BT~ indexes; ~BT~v[lo:hi]~BT~ slices with **both
 		bounds inclusive** — ~BT~t[1:3]~BT~ is three elements — and either bound may be
 		omitted (~BT~v[:2]~BT~, ~BT~v[1:]~BT~, ~BT~v[:]~BT~). Every one is proved in range at compile
@@ -1586,18 +1586,31 @@ func modules(): Str {
 		  control; delete a line to take the latest again.
 		* Fetching needs ~BT~git~BT~ on the PATH.
 
-		## Importing a standard library module
+		## The standard library
+
+		**Every module answers to its own name, with no import**: ~BT~task.sleep(10)~BT~,
+		~BT~conv.sti(text)~BT~ and a ~BT~ui.View~BT~ parameter are ~BT~hive.task.sleep(10)~BT~,
+		~BT~hive.conv.sti(text)~BT~ and ~BT~hive.ui.View~BT~, written short. The name is held
+		the way a [builtin's](builtins.md) is: a declaration, an import, a local or a
+		parameter of the same name comes first, per module, and ~BT~hive.<module>~BT~
+		reaches the library whatever was declared.
 
 		~CODE~hive
-		import hive.ui
-		import hive.net as web
+		import ./lib/clock as time
+
+		proc main(): void \{
+			echo time.now()         // lib/clock's
+			echo hive.time.now()    // the library's
+			task.sleep(10)          // the library's
+		}
 		~CODE~
 
-		The path is the module and nothing else — ~BT~import hive.ui~BT~, never
-		~BT~import hive.ui.View~BT~ — and a module this compiler does not carry
-		(~BT~import hive.jsno~BT~) is refused at the import, not at every use of it. **Nothing is imported into the program**: the alias is a
-		*spelling*, ~BT~ui.row~BT~ and ~BT~hive.ui.row~BT~ are the same call, both are always
-		available, and neither changes what is linked. ~BT~import hive~BT~ is not a thing to
+		~BT~import hive.net as web~BT~ gives a module another name. The path is the module
+		and nothing else — ~BT~import hive.ui~BT~, never ~BT~import hive.ui.View~BT~ — and a
+		module this compiler does not carry (~BT~import hive.jsno~BT~) is refused at the
+		import, not at every use of it. **Nothing is imported into the program**: the
+		alias is a *spelling*, ~BT~web.httpServe~BT~ and ~BT~hive.net.httpServe~BT~ are the same
+		call, and neither changes what is linked. ~BT~import hive~BT~ is not a thing to
 		write.
 
 		**A module you don't use is not in your build.** Each ~BT~hive.*~BT~ module is
@@ -1686,6 +1699,10 @@ func builtins(): Str {
 		module**. Two things follow: only the builtin ~BT~append~BT~ requires a ~BT~mut~BT~ target,
 		and only the builtin ~BT~indexOf~BT~ hands back an index the bounds pass accepts
 		unguarded.
+
+		The library's module names — ~BT~conv~BT~, ~BT~task~BT~, ~BT~ui~BT~ and the rest — are held
+		the same way, and also give way to an import of the same name
+		([modules](modules.md)).
 
 		## Walking a vector: ~BT~map~BT~, ~BT~filter~BT~, ~BT~filterMap~BT~
 

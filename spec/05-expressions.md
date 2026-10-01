@@ -128,8 +128,9 @@ type carries the promise — see
 
 ## 5.5 Member access, indexing, slicing
 
-`x.field` reads a field. `x.moduleMember` reads through an import alias — the two
-are told apart by what the left side names.
+`x.field` reads a field. `x.moduleMember` reads through an import alias or a
+library module's name ([12](12-modules.md#126-the-standard-library)) — the two are
+told apart by what the left side names.
 
 `v[i]` indexes. `v[lo:hi]` slices, **both bounds inclusive**: `t[1:3]` is three
 elements. Either bound may be omitted (`v[:2]`, `v[1:]`, `v[:]`). Every index and

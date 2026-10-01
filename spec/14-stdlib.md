@@ -5,9 +5,10 @@ Each module owns its types under its own namespace — `hive.net.HttpRequest`,
 builtin types that live directly on `hive` are the core ones the language uses
 without a module: `Result`, `Table` and `Address`.
 
-A module reached often can be given a short name with `import`
-([12](12-modules.md#126-importing-a-standard-library-module)). It is a spelling
-and nothing more.
+**Every module also answers to its own name**, with no import: `conv.sti(text)`
+is `hive.conv.sti(text)`, wherever the program has not taken `conv` for something
+of its own ([12](12-modules.md#126-the-standard-library)). `import` gives a module
+another name. Either is a spelling and nothing more.
 
 **A library call has a signature and is held to it** — how many arguments it
 takes and what each one is — exactly as a declared `func` is. A call that does
@@ -98,9 +99,9 @@ A dictionary: keys paired with values, looked up by key. Type-level rules are in
   a map's keys are whatever was put in it. Send its pairs as a vector of a type
   declared for them. The one exception is the properties of a
   [`hive.json.JsonValue`](#147-hivejson) object, whose codec is the document itself.
-* `import hive.map` names the module `map`, which **coexists with the
-  `map(v, f)` builtin**: a call on the name is the module and a bare call is the
-  builtin. Nothing has to choose, because the two are told apart by shape.
+* The module's name `map` **coexists with the `map(v, f)` builtin**: a call on
+  the name is the module and a bare call is the builtin. Nothing has to choose,
+  because the two are told apart by shape.
 
 ## 14.4 `hive.file`
 

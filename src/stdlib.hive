@@ -10,13 +10,14 @@ import ./ast
 import ./text
 import ./types
 
+func modules(): Str[dyn] {
+	return ["conv", "math", "term", "file", "map", "env", "task", "time", "json",
+		"crypto", "net", "sql", "syslink", "ui", "codec"]
+}
+
 // Whether `module` is one this compiler carries.
 func isKnownModule(module: Str): Bool {
-	return module == "conv" || module == "math" || module == "term"
-		|| module == "file" || module == "map" || module == "env"
-		|| module == "task" || module == "time" || module == "json"
-		|| module == "crypto" || module == "net" || module == "sql"
-		|| module == "syslink" || module == "ui" || module == "codec"
+	return indexOf(modules(), module) is Result.Ok(_)
 }
 
 // The name a library call carries on the runtime package: `hive.conv.its` becomes
