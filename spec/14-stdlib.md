@@ -815,6 +815,7 @@ all.
 | Colour | `background(Tone)` `paint(Tone)` |
 | Canvas | `region(x, y, width, height)` `thick(Float)` |
 | State | `disabled` `busy` `placeholder` `hint` `kind` |
+| Touch | `touch(Str)` |
 | Events | `on(Msg)` `onDismiss(Msg)` `onInput(f)` `onSubmit(f)` `onChoose(f)` `onToggle(f)` `onPick(f)` `onSort(f)` |
 
 A scene takes attributes of its own — a camera, a sky, and the events a game
@@ -1272,6 +1273,12 @@ unshadowed.
 | `onPad(f)` | `Int, Str, Float` — which pad, which control, where it now is |
 | `onRate(f)` | `Int` — the screen's refresh rate, in hertz |
 | `onSize(f)` | `Int, Int` — how wide and how tall the scene's box is, in pixels |
+
+**`touch(name)` makes any widget a thumb control**, heard through `onPad` as pad
+-1: `name` is 1 while a finger is on it and 0 once it lifts, and `nameX` and
+`nameY` are where on it the finger is, -1 to 1 from its middle, held inside a
+circle. The widget's box is taken when the finger goes down, so a repaint under
+the finger moves nothing, and every finger is followed on its own.
 
 **`onFrame` reports the time since the last frame the program was told about, and
 not the time since the last frame the window drew.** The two are the same whenever
