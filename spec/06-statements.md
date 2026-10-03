@@ -120,7 +120,8 @@ A `Str` echoed on its own **is** the line, so it is not quoted. Inside any of
 those it **is** quoted, which is what tells `["1", "2"]` from `[1, 2]` and from
 `["1 2"]`.
 
-`echo` is legal in both a `func` and a `proc`.
+`echo` is legal in both a `func` and a `proc`. Echoing a
+[`Secret`](03-types.md#311-secret), or anything holding one, is a compile error.
 
 ## 6.7 `assert`
 
@@ -147,7 +148,8 @@ panic: hive: assertion failed: total == 10
 `panic value` stops the program immediately, showing `value` rendered as a string
 exactly the way `echo` displays it — so `panic err` prints the error's message
 and an atom prints its name, not its decimal form. Unlike `assert` it always
-fires, and it takes any value rather than only a `Bool`.
+fires, and it takes any value rather than only a `Bool` — any but a
+[`Secret`](03-types.md#311-secret) or something holding one.
 
 Because it never returns, a branch or tail ending in `panic` counts as a
 terminating path, so `panic "unreachable"` can close off an impossible tail.

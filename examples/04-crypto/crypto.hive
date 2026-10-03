@@ -18,8 +18,10 @@ proc main(): void {
 	echo hive.crypto.sha256("hello")
 	echo hive.crypto.sha512("hello")
 
-	// Keyed hashing (HMAC-SHA256), also hex.
-	echo hive.crypto.hmacSha256("message", "shared-key")
+	// Keyed hashing (HMAC-SHA256), also hex. A key is a `Secret`, which printing
+	// is a compile error. A literal is in the executable already, so this one is
+	// made with `bypass`, which keeps it in ordinary memory and cannot fail.
+	echo hive.crypto.hmacSha256("message", bypass("shared-key"))
 
 	// Base64 round-trip. Encoding can't fail; decoding returns a Result.
 	encoded := hive.crypto.base64Encode("Hive loves Go")
@@ -33,32 +35,51 @@ proc main(): void {
 
 	// --- Encryption -------------------------------------------------------
 
-	// AES-256-GCM under a password. The key is derived from the password with
-	// PBKDF2 over a random salt, so encrypting cannot fail and returns a plain
-	// Str — base64, ready to be written to a file or put in a JSON field.
-	sealed := hive.crypto.encrypt("attack at dawn", "correct horse battery staple")
-	echo sealed
+	// `hide` keeps text in memory that is never swapped to disk, and answers
+	// with why not when there is none left to lock.
+	hidden := hide("attack at dawn")
+	if hidden is Result.Error(why) {
+		echo "{why.reason}: {why.message}"
+		return
+	}
+
+	// AES-256-GCM under a password. The text and the password are `Secret`s;
+	// what comes back is a plain Str — base64, ready to be written to a file or
+	// put in a JSON field. The key is derived from the password with PBKDF2 over
+	// a random salt, so encrypting cannot fail.
+	password := bypass("correct horse battery staple")
+	if hidden is Result.Ok(message) {
+		echo hive.crypto.encrypt(message, password)
+	}
 
 	// A fresh salt and nonce every call: the same text under the same password
 	// never comes out the same twice.
-	echo hive.crypto.encrypt("attack at dawn", "correct horse battery staple")
+	sealed := hive.crypto.encrypt(bypass("attack at dawn"), password)
+	echo sealed
 
-	opened := hive.crypto.decrypt(sealed, "correct horse battery staple")
+	// What decrypting opens is a `Secret` too, and `reveal` is its text.
+	opened := hive.crypto.decrypt(sealed, password)
 	if opened is Result.Ok(plain) {
-		echo "decrypted: {plain}"
+		echo "decrypted: {reveal(plain)}"
 	}
 
 	// A wrong password fails the authentication tag — and so does a message
 	// edited after it was encrypted. The tag cannot tell the two apart, so the
 	// reason is the same for both.
-	if hive.crypto.decrypt(sealed, "hunter2") is Result.Error(error) {
+	if hive.crypto.decrypt(sealed, bypass("hunter2")) is Result.Error(error) {
 		echo "rejected ({error.reason}): {error.message}"
 	}
 
-	// --- JSON Web Tokens --------------------------------------------------
+	// A secure random 32-byte secret (64 hex chars), drawn straight into locked
+	// memory. Non-deterministic.
+	if hive.crypto.randomSecret(32) is Result.Ok(secret) {
+		tokens(secret)
+	}
+}
 
-	// A secure random 32-byte secret (64 hex chars). Non-deterministic.
-	secret := hive.crypto.randomHex(32)
+// --- JSON Web Tokens ------------------------------------------------------
+
+proc tokens(secret: Secret): void {
 
 	// Sign: `encode` with a JWT codec. The claims are a typed value, and `exp`
 	// is a Unix timestamp.
@@ -75,7 +96,7 @@ proc main(): void {
 	}
 
 	// The wrong secret fails the signature check.
-	forged := Session.decode(token, hive.crypto.jwtCodec("not-the-secret"))
+	forged := Session.decode(token, hive.crypto.jwtCodec(bypass("not-the-secret")))
 	if forged is Result.Error(error) {
 		echo "rejected: {error.found}"
 	}

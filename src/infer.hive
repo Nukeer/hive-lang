@@ -623,6 +623,15 @@ func builtinResult(env: Env, name: Str, argTypes: types.Ty[], args: ast.Arg[]): 
 	if name == "kill" {
 		return types.Ty.TVoid()
 	}
+	if name == "hide" {
+		return types.Ty.TResult(types.Ty.TSecret(), types.secretError())
+	}
+	if name == "bypass" {
+		return types.Ty.TSecret()
+	}
+	if name == "reveal" {
+		return types.Ty.TStr()
+	}
 	return types.Ty.TUnknown()
 }
 
@@ -665,6 +674,8 @@ func builtinParams(name: Str, arity: Int): Str[dyn] {
 		return ["endpoint", "name"]
 	}
 	if name == "kill" { return ["address"] }
+	if name == "hide" || name == "bypass" { return ["text"] }
+	if name == "reveal" { return ["secret"] }
 	return []
 }
 
@@ -682,6 +693,7 @@ func isBuiltin(name: Str): Bool {
 		|| name == "filterMap" || name == "sort"
 		|| name == "replaceFirst" || name == "replaceAll"
 		|| name == "encode" || name == "spawn" || name == "at" || name == "kill"
+		|| name == "hide" || name == "reveal" || name == "bypass"
 }
 
 // --- Patterns ----------------------------------------------------------------

@@ -37,6 +37,9 @@ column below; a position overloaded by type answers to each of its names, so
 | `at(name)` | `at(Atom): Address` | the service registered under `name` on this node |
 | `at(endpoint, name)` | `at(Str, Atom): Address` | the same service on the node at `endpoint` |
 | `kill(address)` | `kill(Address): void` | stops a service |
+| `hide(text)` | `hide(Str): Result<Secret, SecretError>` | `text` as a [`Secret`](03-types.md#311-secret), in memory never swapped to disk |
+| `bypass(text)` | `bypass(Str): Secret` | `text` as a `Secret` in ordinary memory, which cannot fail |
+| `reveal(secret)` | `reveal(Secret): Str` | what a `Secret` holds, as text |
 
 `len` and `bytes` differ only for strings: for `"café"`, `len` is `4` (runes)
 while `bytes` is `5`.
@@ -102,6 +105,19 @@ these three, and reached by calling its `Address`.
 * **`kill` works on any address**, on this node or another. The service's
   mailbox closes, its monitors are told, and its name is free again before any of
   them hears about it. Killing one twice is harmless.
+
+## Secrets: `hide`, `bypass`, `reveal`
+
+A [`Secret`](03-types.md#311-secret) is a language type rather than a library's,
+since `hive.term`, `hive.env`, `hive.file`, `hive.crypto` and `hive.syslink` all
+take or hand one back — so making one and reading one are builtins. `reveal` is
+the only way from a `Secret` to text, which is what makes printing one a
+compile error rather than a habit to keep.
+
+`hide` locks the memory it keeps the text in, and locked memory runs out, so it
+answers a `Result` whose error is a `SecretError`. `bypass` makes the same
+`Secret` without locking anything, so it cannot fail — and is free to be swapped
+to disk.
 
 ## A declaration of your own wins
 

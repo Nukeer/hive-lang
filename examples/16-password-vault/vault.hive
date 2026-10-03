@@ -12,6 +12,10 @@
 // typed at those prompts is not left on the screen, nor in the scrollback of
 // whoever walks past afterwards. `hive.file.writeSecret` is the other half of
 // that: the file it writes is readable by this account and no other.
+//
+// The master password is a `Secret` from the moment it is typed: kept in memory
+// that is never swapped to disk, and a compile error to print. The entries are
+// plain `Str`s, because the vault is one JSON document and a `Secret` has none.
 
 // The vault as it is JSON-encoded before being encrypted: `encode` derives the
 // encoder from these types and `Vault.decode` the decoder, so the file format is
@@ -39,15 +43,17 @@ proc main(): void {
 	// it was right by trying to open it; a new one asks twice, below.
 	if hive.file.exists(file()) {
 		echo "Master password:"
-		master := hive.term.readSecret()
-		opened := open(master)
-		if opened is Result.Error(problem) {
-			echo problem
-			return
-		}
-		if opened is Result.Ok(vault) {
-			echo "{len(vault.entries)} entries unlocked."
-			run(vault, master)
+		typed := hive.term.readSecret()
+		if typed is Result.Error(why) {
+			echo why.message
+		} else if typed is Result.Ok(master) {
+			opened := open(master)
+			if opened is Result.Error(problem) {
+				echo problem
+			} else if opened is Result.Ok(vault) {
+				echo "{len(vault.entries)} entries unlocked."
+				run(vault, master)
+			}
 		}
 		return
 	}
@@ -64,7 +70,7 @@ proc main(): void {
 
 // The command loop. `read` shows what is typed — a command is not a secret —
 // and the secrets themselves are read with `readSecret` further down.
-proc run(vault: Vault, master: Str): void {
+proc run(vault: Vault, master: Secret): void {
 	echo "Commands: list, get <name>, add <name>, gen <name>, del <name>, quit"
 
 	mut Vault open = vault
@@ -104,13 +110,15 @@ proc run(vault: Vault, master: Str): void {
 
 		if line is "add {name}" {
 			echo "Secret for {name}:"
-			secret := hive.term.readSecret()
-			if secret == "" {
+			typed := hive.term.readSecret()
+			if typed is Result.Error(why) {
+				echo why.message
+			} else if typed is Result.Ok(secret) && reveal(secret) == "" {
 				echo "nothing typed — {name} left alone"
-				continue
+			} else if typed is Result.Ok(secret) {
+				open = save(replace(open, name, reveal(secret)), master)
+				echo "{name} saved"
 			}
-			open = save(replace(open, name, secret), master)
-			echo "{name} saved"
 			continue
 		}
 
@@ -140,25 +148,27 @@ proc run(vault: Vault, master: Str): void {
 // Asks for a master password twice and writes the empty vault it opens, so that
 // a typo in a password nothing has been stored under yet is caught while it
 // still costs nothing. Answers with the password the vault was created under.
-proc create(): Result<Str, Str> {
+proc create(): Result<Secret, Str> {
 	echo "No vault here yet. Choose a master password:"
-	master := hive.term.readSecret()
-	if len(master) < 8 {
-		return Result.Error("a master password of at least 8 characters, please")
-	}
-
-	echo "Type it again:"
-	if hive.term.readSecret() != master {
+	chosen := hive.term.readSecret()
+	if chosen is Result.Error(why) {
+		return Result.Error(why.message)
+	} else if chosen is Result.Ok(master) {
+		if len(reveal(master)) < 8 {
+			return Result.Error("a master password of at least 8 characters, please")
+		}
+		echo "Type it again:"
+		if hive.term.readSecret() is Result.Ok(again) && again == master {
+			save(Vault([]), master)
+			echo "created."
+			return Result.Ok(master)
+		}
 		return Result.Error("those two do not match — nothing was created")
 	}
-
-	save(Vault([]), master)
-	echo "created."
-	return Result.Ok(master)
 }
 
 // Reads the vault and opens it, or says what went wrong in a sentence.
-proc open(master: Str): Result<Vault, Str> {
+proc open(master: Secret): Result<Vault, Str> {
 	read := hive.file.read(file())
 	if read is Result.Error(problem) {
 		return Result.Error("could not read {file()}: {problem.message}")
@@ -170,7 +180,7 @@ proc open(master: Str): Result<Vault, Str> {
 		if opened is Result.Error(_) {
 			return Result.Error("wrong master password, or {file()} has been tampered with")
 		} else if opened is Result.Ok(plain) {
-			parsed := Vault.decode(plain, hive.json.codec())
+			parsed := Vault.decode(reveal(plain), hive.json.codec())
 			if parsed is Result.Ok(vault) {
 				return Result.Ok(vault)
 			} else if parsed is Result.Error(problem) {
@@ -186,12 +196,20 @@ proc open(master: Str): Result<Vault, Str> {
 //
 // `writeSecret` rather than `write`: the file is already encrypted, and leaving
 // it readable by this account alone is the second lock rather than the first.
-proc save(vault: Vault, master: Str): Vault {
-	sealed := hive.crypto.encrypt(encode(vault, hive.json.codec()), master)
-	if hive.file.writeSecret(file(), sealed) is Result.Error(problem) {
-		// Carrying on would leave the entry in memory only, and the next `get`
-		// would answer with something the file does not have.
-		panic problem
+//
+// The ciphertext goes through `bypass`: it is safe to be seen, so it needs no
+// locked memory, and `writeSecret` only takes a `Secret`.
+proc save(vault: Vault, master: Secret): Vault {
+	plain := hide(encode(vault, hive.json.codec()))
+	if plain is Result.Error(why) {
+		panic why
+	} else if plain is Result.Ok(text) {
+		sealed := hive.crypto.encrypt(text, master)
+		if hive.file.writeSecret(file(), bypass(sealed)) is Result.Error(problem) {
+			// Carrying on would leave the entry in memory only, and the next `get`
+			// would answer with something the file does not have.
+			panic problem
+		}
 	}
 	return vault
 }

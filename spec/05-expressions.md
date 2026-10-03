@@ -22,7 +22,8 @@ echo "loaded {len(rows)} of {total}"
 ```
 
 Interpolation is the only implicit conversion in the language, and it goes one
-way: a value becomes text, never the reverse.
+way: a value becomes text, never the reverse. A [`Secret`](03-types.md#311-secret),
+or anything holding one, is never interpolated.
 
 ## 5.3 Calls
 

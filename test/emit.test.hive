@@ -491,7 +491,7 @@ test "a library call is a call of the same name on the runtime package" {
 	assert has(stmt("echo hive.time.lastDayOfMonth()"), "hive.TimeLastDayOfMonth()")
 	assert has(stmt("echo hive.time.weekday()"), "hive.TimeWeekday()")
 	assert has(stmt("echo hive.time.millisecond()"), "hive.TimeMillisecond()")
-	assert has(stmt("hive.syslink.setKey(\"ours\")"), "hive.SyslinkSetKey(\"ours\")")
+	assert has(stmt("hive.syslink.setKey(bypass(\"ours\"))"), "hive.SyslinkSetKey(hive.Bypass(\"ours\"))")
 }
 
 test "only the modules a program referenced are asked for" {
@@ -505,14 +505,14 @@ test "only the modules a program referenced are asked for" {
 }
 
 test "writing a secret asks for a file per platform" {
-	p := loader.loadText("main.hive", "proc main(): void \{ echo hive.file.writeSecret(\"k\", \"s\") }")
+	p := loader.loadText("main.hive", "proc main(): void \{ echo hive.file.writeSecret(\"k\", bypass(\"s\")) }")
 	out := emit.emitModule(p.module)
 	assert join(out.modules, ",") == "file,filewrite,filewriteunix,filewritewindows"
-	assert has(out.source, "hive.FileWriteSecret(\"k\", \"s\")")
+	assert has(out.source, "hive.FileWriteSecret(\"k\", hive.Bypass(\"s\"))")
 
 	// A program that only reads one carries none of those.
-	reads := loader.loadText("main.hive", "proc main(): void \{ echo hive.term.readSecret() }")
-	assert join(emit.emitModule(reads.module).modules, ",") == "term,codec,termsecret,termsecretunix,termsecretwindows"
+	reads := loader.loadText("main.hive", "proc main(): void \{ if hive.term.readSecret() is Result.Ok(s) \{ echo reveal(s) } }")
+	assert join(emit.emitModule(reads.module).modules, ",") == "term,codec,termsecret,termsecretunix,termsecretwindows,secret,secretunix,secretwindows,secretother"
 }
 
 test "len is three builtins, told apart by what it was given" {
@@ -642,6 +642,32 @@ test "a JsonValue reads and writes the document as it is" {
 	assert has(got, "return hive_json_JsonValueNull\{}, nil")
 	// Never the tagged-union shape every other union takes.
 	assert has(got, "hive.JsonVariant(") == false
+}
+
+test "hide locks memory a file per platform, and bypass and reveal need none of it" {
+	p := loader.loadText("main.hive", "proc main(): void \{ if hide(\"pw\") is Result.Ok(s) \{ echo reveal(s) } }")
+	out := emit.emitModule(p.module)
+	assert join(out.modules, ",") == "secret,secretunix,secretwindows,secretother"
+	assert has(out.source, "hive.Hide(\"pw\")")
+	bypassed := loader.loadText("main.hive", "proc main(): void \{ echo reveal(bypass(\"pw\")) }")
+	assert len(emit.emitModule(bypassed.module).modules) == 0
+	assert has(stmt("echo reveal(bypass(\"pw\"))"), "hive.Reveal(hive.Bypass(\"pw\"))")
+	env := loader.loadText("main.hive", "proc main(): void \{ if hive.env.getSecret(\"K\") is Result.Ok(k) \{ echo reveal(k) } }")
+	assert join(emit.emitModule(env.module).modules, ",") == "env,secret,secretunix,secretwindows,secretother"
+	alone := loader.loadText("main.hive", "proc shown(s: Secret): Str \{ return reveal(s) }\nproc main(): void \{ }")
+	assert len(emit.emitModule(alone.module).modules) == 0
+}
+
+test "secrets compare what they hold, wherever they sit" {
+	assert has(stmt("echo bypass(\"a\") == bypass(\"b\")"), "hive.Eq(hive.Bypass(\"a\"), hive.Bypass(\"b\"))")
+	got := go("type Login \{ user: Str  password: Secret }\nproc main(): void \{ a := Login(\"ada\", bypass(\"pw\"))  echo a == a }")
+	assert has(got, "hive.Eq(a, a)")
+	assert has(got, "Password hive.Secret")
+}
+
+test "a message carrying a Secret is refused where its codec is derived" {
+	got := go("type Msg \{ Key \{ key: Secret } }\nproc inbox(state: mut Int, m: Msg): Msg \{ return m }\nproc main(): void \{ if spawn(inbox, 0) is Result.Ok(a) \{ a(Msg.Key(bypass(\"k\"))) } }")
+	assert got == "emit: a `Secret` has no JSON, because only `reveal` turns one into text"
 }
 
 test "a message carrying a Table is refused where its codec is derived" {

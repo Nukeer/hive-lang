@@ -14,8 +14,8 @@ import ./vault
 // A master password the tests share. Long enough to be one `create` would have
 // accepted, so that nothing here passes on a password the program itself would
 // have turned down.
-func master(): Str {
-	return "correct horse battery staple"
+func master(): Secret {
+	return bypass("correct horse battery staple")
 }
 
 func entries(vault: vault.Vault): Int {
@@ -121,7 +121,7 @@ test "the wrong master password does not open the vault" {
 	hive.file.delete(vault.file())
 	vault.save(vault.replace(vault.Vault([]), "github", "s3cr3t"), master())
 
-	assert vault.open("not the master password") is Result.Error(_)
+	assert vault.open(bypass("not the master password")) is Result.Error(_)
 }
 
 test "a vault changed behind the program's back is refused" {

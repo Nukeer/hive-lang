@@ -141,7 +141,8 @@ func termResult(name: Str): types.Ty {
 	// The value that says read and write it as command-line flags.
 	if name == "codec" { return types.Ty.TCodec(codecErrorOf("term")) }
 	if name == "print" || name == "status" { return types.Ty.TVoid() }
-	if name == "read" || name == "readSecret" { return types.Ty.TStr() }
+	if name == "read" { return types.Ty.TStr() }
+	if name == "readSecret" { return types.Ty.TResult(types.Ty.TSecret(), types.secretError()) }
 	// Whether anybody is watching.
 	if name == "isTerminal" { return types.Ty.TBool() }
 	if name == "args" {
@@ -226,6 +227,9 @@ func envResult(name: Str): types.Ty {
 	if name == "get" {
 		return types.Ty.TResult(types.Ty.TStr(), types.Ty.TLib("env", "EnvironmentError"))
 	}
+	if name == "getSecret" {
+		return types.Ty.TResult(types.Ty.TSecret(), types.Ty.TLib("env", "EnvironmentError"))
+	}
 	return types.Ty.TUnknown()
 }
 
@@ -287,6 +291,10 @@ func isJsonValue(name: Str): Bool {
 
 func tableHasNoJson(): Str {
 	return "a `Table` — `Str[dyn][dyn]` — has no JSON of its own. A document with no declared shape is a `hive.json.JsonValue`, and rows that mean something are a vector of a type declared for them"
+}
+
+func secretHasNoJson(): Str {
+	return "a `Secret` has no JSON, because only `reveal` turns one into text"
 }
 
 func tableHasNoDecoder(): Str {
@@ -441,9 +449,9 @@ func netResult(name: Str): types.Ty {
 	return types.Ty.TUnknown()
 }
 
-// Everything here is a `Str` in and a `Str` out, bar the three that can fail,
-// the one that reads a token unverified, and the codec — a token is written and
-// read by `encode` and `T.decode`, which the codec is handed to.
+// Everything here is a `Str` out, bar the three that can fail, the one that reads
+// a token unverified, `randomSecret`, and the codec — a token is written and read
+// by `encode` and `T.decode`, which the codec is handed to.
 func cryptoResult(name: Str): types.Ty {
 	cryptoError := types.Ty.TLib("crypto", "CryptoError")
 	if name == "sha256" || name == "sha512" || name == "hmacSha256"
@@ -453,8 +461,12 @@ func cryptoResult(name: Str): types.Ty {
 	}
 	// The value that says sign it, and check it, as a JWT under this secret.
 	if name == "jwtCodec" { return types.Ty.TCodec(codecErrorOf("jwt")) }
-	if name == "base64Decode" || name == "decrypt" {
+	if name == "base64Decode" {
 		return types.Ty.TResult(types.Ty.TStr(), cryptoError)
+	}
+	if name == "randomSecret" { return types.Ty.TResult(types.Ty.TSecret(), types.secretError()) }
+	if name == "decrypt" {
+		return types.Ty.TResult(types.Ty.TSecret(), cryptoError)
 	}
 	if name == "jwtHeader" {
 		return types.Ty.TResult(types.Ty.TLib("crypto", "Header"), cryptoError)
@@ -574,6 +586,10 @@ func fieldsOf(module: Str, name: Str): ast.Field[dyn] {
 	if module == "sql" {
 		if name == "SqlError" { return [field("reason"), field("message")] }
 		if name == "DatabaseDriver" { return [field("name")] }
+		return []
+	}
+	if module == "" {
+		if name == "SecretError" { return [field("reason"), field("message")] }
 		return []
 	}
 	if module == "crypto" {
@@ -969,9 +985,10 @@ func paramsOf(module: Str, name: Str): types.Ty[dyn] {
 	}
 	if module == "file" {
 		if name == "write" || name == "append" || name == "copy" || name == "move"
-			|| name == "csv" || name == "writeSecret" {
+			|| name == "csv" {
 			return [types.Ty.TStr(), types.Ty.TStr()]
 		}
+		if name == "writeSecret" { return [types.Ty.TStr(), types.Ty.TSecret()] }
 		return [types.Ty.TStr()]
 	}
 	if module == "conv" {
@@ -995,10 +1012,12 @@ func paramsOf(module: Str, name: Str): types.Ty[dyn] {
 	if module == "sql" { return sqlParams(name) }
 	if module == "net" { return netParams(name) }
 	if module == "crypto" {
-		if name == "randomHex" { return [types.Ty.TInt()] }
-		if name == "hmacSha256" || name == "encrypt" || name == "decrypt" {
-			return [types.Ty.TStr(), types.Ty.TStr()]
+		if name == "randomHex" || name == "randomSecret" { return [types.Ty.TInt()] }
+		if name == "hmacSha256" || name == "decrypt" {
+			return [types.Ty.TStr(), types.Ty.TSecret()]
 		}
+		if name == "encrypt" { return [types.Ty.TSecret(), types.Ty.TSecret()] }
+		if name == "jwtCodec" { return [types.Ty.TSecret()] }
 		return [types.Ty.TStr()]
 	}
 	return []
@@ -1079,7 +1098,7 @@ func paramNamesOf(module: Str, name: Str): Str[dyn] {
 		return ["conn"]
 	}
 	if module == "crypto" {
-		if name == "randomHex" { return ["bytes"] }
+		if name == "randomHex" || name == "randomSecret" { return ["bytes"] }
 		if name == "hmacSha256" { return ["input", "key"] }
 		if name == "encrypt" { return ["plaintext", "password"] }
 		if name == "decrypt" { return ["ciphertext", "password"] }
@@ -1183,7 +1202,8 @@ func mapParams(name: Str): types.Ty[dyn] {
 
 func syslinkParams(name: Str): types.Ty[dyn] {
 	address := types.Ty.TAddress()
-	if name == "listen" || name == "setKey" { return [types.Ty.TStr()] }
+	if name == "listen" { return [types.Ty.TStr()] }
+	if name == "setKey" { return [types.Ty.TSecret()] }
 	if name == "monitor" { return [address, address, types.Ty.TUnknown()] }
 	// `node` and `peers` ask for nothing.
 	return []

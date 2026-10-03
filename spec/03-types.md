@@ -300,3 +300,44 @@ message sent, since a service answers with one of its own.
 
 A program that declares its own `Address` has that one under the bare name, and
 the builtin is still there as `hive.Address`.
+
+## 3.11 `Secret`
+
+Text that must not leak: a password, a key, a token. `hide(text)` makes one and
+`reveal(secret)` is its text again ([13](13-builtins.md)); nothing else turns one
+into a `Str`.
+
+* **It is never shown.** `echo`, `panic` and an interpolation of a `Secret` are
+  compile errors, and so are they of anything holding one — a field, an element,
+  a variant's payload, a `Result` — wherever it sits. So is `encode`ing or
+  decoding one, and sending one in a message, since a `Secret` has no JSON.
+* **It is never swapped to disk.** What it holds lives in memory the operating
+  system is told to keep in RAM (`mlock` on Linux and macOS, `VirtualLock` on
+  Windows), and is cleared once nothing holds the `Secret` any more.
+* `==` compares what two secrets hold, in constant time for a `Secret` itself.
+  A `Secret` has no order, so `sort` and `<` refuse one.
+
+**Locked memory is finite**, so everything that makes a `Secret` answers a
+`Result`: `hide` answers `Result<Secret, SecretError>`, and so do
+`hive.term.readSecret` and `hive.crypto.randomSecret`. A `SecretError` has a
+`reason` — `"LimitExceeded"` when the locked-memory limit is used up,
+`"Unsupported"` where the platform cannot lock memory at all — and a `message`.
+A call that already fails in its own way reports it there instead:
+`hive.crypto.decrypt` as a `CryptoError` with that `reason`, and
+`hive.env.getSecret` as an `EnvironmentError`.
+
+`bypass(text)` is the one way to a `Secret` that cannot fail. It is a `Secret` in
+every other respect — never shown, compared the same way, accepted wherever one
+is — but kept in ordinary memory, which the operating system is free to swap out.
+It is for text that was never really secret on the way in: a literal, which the
+executable already holds, or a ciphertext that has to go where a `Secret` does.
+
+What `reveal` answers with is an ordinary `Str`, and is kept like one. The text
+`hide` was handed was a `Str` too, so a secret typed into the source or read as
+a `Str` was ordinary memory before it was hidden: `hive.term.readSecret`,
+`hive.env.getSecret` and `hive.crypto.randomSecret` hand one over without that
+([14](14-stdlib.md)). Go's own cryptography keeps what it derives from a key on
+its heap while it works.
+
+A program that declares its own `Secret` or `SecretError` has that one under the
+bare name, and the builtin is still there as `hive.Secret` or `hive.SecretError`.
