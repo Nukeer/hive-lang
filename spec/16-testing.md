@@ -23,6 +23,26 @@ a file holding only tests needs no `main`, and a test run on a program runs
 names a test, so two tests may not share one — nor two titles that differ only in
 a space against an `_`, which the report writes alike.
 
+## A whole directory
+
+**`hive test <directory>`** — most often `hive test .` — runs every test under a
+directory without naming an entrypoint. It reads every `.hive` file there that
+git does not ignore (every one, outside a git repository), and runs each file's
+tests **exactly once**: a file another one imports has its tests run in the
+importer's program rather than in one of its own. A file *outside* the directory
+that a file inside it imports has its tests run too, in the program of a file
+that reaches it.
+
+Each program compiled prints its report under its own path, and the last line
+totals them:
+
+```
+  3 programs, 41 tests: 41 passed
+```
+
+It exits non-zero when any test fails, any program it compiles is refused, or any
+file under the directory cannot be read.
+
 ## `assert` means the same thing, and does something different
 
 `assert` says what it always says: this must hold. What changes is the

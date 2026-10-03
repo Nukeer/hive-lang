@@ -4,9 +4,10 @@
 #   ./test/run           run them with the compiler itself (needs ./bootstrap)
 #
 # There are two kinds. The unit suites are Hive files declaring `test` blocks:
-# they call the compiler's own passes and assert about what came back. The
-# end-to-end suite compiles whole programs and runs them, which is the one part
-# a Hive test cannot do for itself.
+# they call the compiler's own passes and assert about what came back, and
+# `hive test` finds every one under this directory. The end-to-end suite
+# compiles whole programs and runs them, which is the one part a Hive test
+# cannot do for itself.
 set -uo pipefail
 
 here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -22,20 +23,12 @@ fi
 echo "Running the suites with the compiler itself."
 echo
 
-suites=(text naming paths lexer regex parser loader fetch goffi mono check ranges emit analyze container agents icon project runtime hivec)
 failed=0
 
-for suite in "${suites[@]}"; do
-	printf '%-12s ' "$suite"
-	out="$("$runner" test "$here/$suite.test.hive" 2>&1)"
-	if echo "$out" | grep -qE '^  [0-9]+ tests?: [0-9]+ passed$'; then
-		echo "$out" | grep -oE '[0-9]+ tests?: .*' | head -1
-	else
-		echo "FAILED"
-		echo "$out" | grep -E '^  FAIL|^ +' | head -20 | sed 's/^/    /'
-		failed=$((failed + 1))
-	fi
-done
+# Passing tests and coverage are left out: each suite's tally, and any failure.
+if ! (cd "$root" && "$runner" test test) 2>&1 | grep -vE '^$|^  (PASS  |coverage: |never exercised: )'; then
+	failed=$((failed + 1))
+fi
 
 echo
 echo "End to end:"

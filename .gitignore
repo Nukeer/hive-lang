@@ -47,6 +47,7 @@ test/e2e/*
 !test/e2e/*.hive
 !test/e2e/*.expected
 !test/e2e/lib/
+!test/e2e/tree/
 !test/e2e/run
 
 # The same for the window suite.

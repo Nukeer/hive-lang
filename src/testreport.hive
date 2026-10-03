@@ -57,15 +57,16 @@ func tally(passed: Int, failed: Int): Str {
 	return "  {total} {word}: {passed} passed, {failed} failed"
 }
 
-// Whether the run had no failures, which is what the exit code is about: a
+// How many tests the run failed, which is what the exit code is about: a
 // failing suite is a failing command.
-func allPassed(titles: Str[], run: Str): Bool {
+func failures(titles: Str[], run: Str): Int {
+	mut failed := 0
 	for each o in parseRun(run, titles) {
 		if o.passed == false {
-			return false
+			failed = failed + 1
 		}
 	}
-	return true
+	return failed
 }
 
 proc readOr(path: Str): Str {
