@@ -60,6 +60,18 @@ for source in "$here"/*.test.hive; do
 	fi
 done
 
+# A directory through `hive test`: `shapes.test.hive` runs `area.hive`'s tests
+# and those of `../lib/doubled.hive` outside it, in one program, each once.
+out="$("$hive" test "$here/tree" 2>&1)"
+if echo "$out" | grep -qxF '  1 program, 4 tests: 4 passed'; then
+	echo "  PASS  tree"
+	passed=$((passed + 1))
+else
+	echo "  FAIL  tree"
+	echo "$out" | sed 's/^/        /'
+	failed=$((failed + 1))
+fi
+
 echo
 total=$((passed + failed))
 if [ "$failed" -eq 0 ]; then

@@ -169,8 +169,8 @@ func refused(errors: diag.Diagnostic[dyn]): Compiled {
 	return Compiled(ast.Module([], [], []), emit.Emitted("", [], [], [], [], false, []), errors, [], ast.Module([], [], []))
 }
 
-// Compile `entry` and write the Go project for it.
-proc build(entry: Str, withTests: Bool, from: Int): Written {
+// Compile `entry` and write the Go project for it, with the tests titled in `titles`.
+proc build(entry: Str, titles: Str[], from: Int): Written {
 	made := passes(entry, from)
 	if len(made.errors) > 0 {
 		return Written("", [], false, false, made.errors)
@@ -179,8 +179,8 @@ proc build(entry: Str, withTests: Bool, from: Int): Written {
 	// The tests come first: a module only a test calls still has to be written.
 	mut Str[dyn] modules = emitted.modules
 	mut tests := ""
-	if withTests {
-		testing := emit.emitTests(made.module, emitted.atoms, emitted.codecs, emitted.modules)
+	if len(titles) > 0 {
+		testing := emit.emitTests(onlyTests(made.module, titles), emitted.atoms, emitted.codecs, emitted.modules)
 		if len(testing.errors) > 0 {
 			return Written("", [], false, false, loader.placed(loader.Program(made.module, made.sources, []), entry, testing.errors))
 		}
@@ -262,6 +262,19 @@ proc build(entry: Str, withTests: Bool, from: Int): Written {
 		put(directory, "declarations.tsv", join(emitted.spans, "\n") + "\n", written, errors)
 	}
 	return Written(directory, written, linksForeign(made.module.foreign), emitted.window, errors)
+}
+
+func onlyTests(module: ast.Module, titles: Str[]): ast.Module {
+	mut ast.Decl[dyn] kept = []
+	for each d in module.decls {
+		if d is ast.Decl.TestDecl(title, _, _) {
+			if indexOf(titles, title) is Result.Error(_) {
+				continue
+			}
+		}
+		append(kept, d)
+	}
+	return ast.Module(module.imports, kept, module.foreign)
 }
 
 // Whether any imported Go file imports something the toolchain has to fetch.
@@ -439,7 +452,7 @@ func payloadName(): Str {
 // it. A program with no window is refused rather than packaged — an app with no
 // activity has no way to be started and nothing to show.
 proc export(entry: Str, target: Str, from: Int): Written {
-	written := build(entry, false, from)
+	written := build(entry, [], from)
 	if len(written.errors) > 0 {
 		return written
 	}
@@ -535,7 +548,7 @@ proc windowsTarget(target: Str): Bool {
 // is this machine, anything else a `goos/goarch` pair. The command line asks
 // `buildsFor` first, so an unknown platform is a mistake in what was typed.
 proc compile(entry: Str, target: Str, from: Int): Written {
-	written := build(entry, false, from)
+	written := build(entry, [], from)
 	if len(written.errors) > 0 {
 		return written
 	}
@@ -596,7 +609,7 @@ func saying(target: Str): Str {
 // to the entrypoint's own folder, so a relative path resolves the way its author
 // wrote it. Answers with the status the program exited with.
 proc run(entry: Str, args: Str[], from: Int): Result<Int, diag.Diagnostic[dyn]> {
-	written := build(entry, false, from)
+	written := build(entry, [], from)
 	if len(written.errors) > 0 {
 		return Result.Error(written.errors)
 	}
@@ -617,10 +630,10 @@ proc run(entry: Str, args: Str[], from: Int): Result<Int, diag.Diagnostic[dyn]> 
 	return Result.Ok(hive.term.attach(program, args, paths.dirOf(entry)))
 }
 
-// Compile `entry` with its tests alongside and run them. Answers with what the
-// toolchain said, which the report reads.
-proc runTests(entry: Str, from: Int): Result<Str, diag.Diagnostic[dyn]> {
-	written := build(entry, true, from)
+// Compile `entry` with the tests titled in `titles` alongside and run them.
+// Answers with what the toolchain said, which the report reads.
+proc runTests(entry: Str, titles: Str[], from: Int): Result<Str, diag.Diagnostic[dyn]> {
+	written := build(entry, titles, from)
 	if len(written.errors) > 0 {
 		return Result.Error(written.errors)
 	}
@@ -721,6 +734,123 @@ proc testTitles(entry: Str): Str[dyn] {
 		}
 	}
 	return out
+}
+
+// --- Testing a directory ----------------------------------------------------
+
+// Every Hive file under `directory` that git does not ignore, or every one where
+// there is no git repository to ask.
+proc hiveFilesUnder(directory: Str): Str[dyn] {
+	mut Str[dyn] out = []
+	listed := hive.term.exec("git", ["-c", "core.quotepath=off", "ls-files", "--cached", "--others", "--exclude-standard", "--", "*.hive"], directory)
+	if listed is Result.Ok(said) {
+		for each line in split(said, "\n") {
+			path := paths.joinPath(directory, line)
+			// `--cached` still lists a tracked file deleted from the tree.
+			if line != "" && hive.file.exists(path) {
+				append(out, path)
+			}
+		}
+		return out
+	}
+	walk(directory, out)
+	return out
+}
+
+proc walk(directory: Str, out: mut Str[dyn]): void {
+	if hive.file.list(directory) is Result.Ok(names) {
+		for each name in names {
+			if text.startsWith(name, ".") {
+				continue
+			}
+			path := paths.joinPath(directory, name)
+			if text.endsWith(name, ".hive") {
+				append(out, path)
+			} else {
+				walk(path, out)
+			}
+		}
+	}
+}
+
+// A test, and the file declaring it, by its loader key.
+type Titled {
+	file: Str
+	title: Str
+}
+
+// A file under the directory, and every test in the program it is the entrypoint of.
+type Reached {
+	entry: Str
+	key: Str
+	tests: Titled[dyn]
+}
+
+// A program a directory's run compiles, and which of its tests it runs.
+type Planned {
+	entry: Str
+	titles: Str[dyn]
+}
+
+// ponytail: each file's imports are parsed again for every file reaching them;
+// share the parsed sources across walks if a large tree makes this slow.
+proc reached(entry: Str): Result<Reached, diag.Diagnostic[dyn]> {
+	walked := loader.reach(entry)
+	if len(walked.errors) > 0 {
+		return Result.Error(walked.errors)
+	}
+	mut Titled[dyn] tests = []
+	for each src in walked.sources {
+		for each d in src.module.decls {
+			if d is ast.Decl.TestDecl(title, _, _) {
+				append(tests, Titled(src.key, title))
+			}
+		}
+	}
+	return Result.Ok(Reached(entry, paths.normalise(entry), tests))
+}
+
+// Each file's tests run once, in the first program that reaches them. A program
+// is compiled for tests of its own, or for tests outside the directory that no
+// other file under it would run; the one reaching most tests goes first, so an
+// importer's run takes in what it imports.
+func plan(reached: Reached[]): Planned[dyn] {
+	mut Str[dyn] scope = []
+	for each r in reached {
+		append(scope, r.key)
+	}
+	mut Str[dyn] ran = []
+	mut Planned[dyn] out = []
+	for each r in sort(reached, reachesMore) {
+		mut Str[dyn] titles = []
+		mut Str[dyn] files = []
+		mut wanted := false
+		for each t in r.tests {
+			if indexOf(ran, t.file) is Result.Ok(_) {
+				continue
+			}
+			append(titles, t.title)
+			append(files, t.file)
+			if t.file == r.key || indexOf(scope, t.file) is Result.Error(_) {
+				wanted = true
+			}
+		}
+		if wanted {
+			append(out, Planned(r.entry, titles))
+			for each f in files {
+				append(ran, f)
+			}
+		}
+	}
+	return sort(out, byEntry)
+}
+
+func reachesMore(a: Reached, b: Reached): Bool {
+	return len(a.tests) > len(b.tests)
+}
+
+func byEntry(a: Planned, b: Planned): Bool {
+	return a.entry < b.entry
 }
 
 // Run every pass and build nothing, which is what an editor wants on every

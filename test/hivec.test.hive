@@ -158,3 +158,8 @@ test "what was refused is named in the complaint" {
 	wrong := hivec.versionRefusal(["--short"])
 	assert text.contains(wrong, "--short")
 }
+
+test "a directory's run totals its programs, its tests and what did not compile" {
+	assert hivec.totals(2, 5, 0, 0) == "  2 programs, 5 tests: 5 passed"
+	assert hivec.totals(1, 3, 1, 2) == "  1 program, 4 tests: 3 passed, 1 failed; 2 did not compile"
+}

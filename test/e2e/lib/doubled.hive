@@ -1,0 +1,7 @@
+func twice(n: Int): Int {
+	return n * 2
+}
+
+test "twice adds a number to itself" {
+	assert twice(5) == 10
+}

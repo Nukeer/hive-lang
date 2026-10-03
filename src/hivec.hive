@@ -8,6 +8,7 @@
 //   hive build     <entrypoint.hive> --target <goos>/<goarch>
 //   hive run       <entrypoint.hive> [..]  compile and run
 //   hive test      <entrypoint.hive>       run the program's tests, with coverage
+//   hive test      <directory>             run every test under it, git-ignored files aside
 //   hive analyze   <entrypoint.hive>       score what it will cost, and write a page
 //   hive container <entrypoint.hive>       write a Dockerfile that builds and runs it
 //   hive agents                            write .hivedocs/ for a coding agent to read
@@ -25,6 +26,7 @@ import ./project
 import ./testreport
 import ./text
 import ./version
+import hive.file
 import hive.term
 
 proc main(): void {
@@ -83,7 +85,11 @@ proc main(): void {
 	} else if command == "run" {
 		run(entry, rest(args, 2), from)
 	} else if command == "test" {
-		suite(entry, from)
+		if hive.file.list(entry) is Result.Ok(_) {
+			suites(entry, from)
+		} else {
+			suite(entry, from)
+		}
 	} else if command == "analyze" {
 		score(entry, from)
 	} else if command == "container" {
@@ -186,22 +192,71 @@ proc run(entry: Str, args: Str[], from: Int): void {
 
 // Named `suite` rather than `test`, because `test` is a keyword.
 proc suite(entry: Str, from: Int): void {
-	answered := project.runTests(entry, from)
+	titles := project.testTitles(entry)
+	answered := project.runTests(entry, titles, from)
 	if answered is Result.Error(errors) {
 		complain(errors)
 		return
 	}
 	if answered is Result.Ok(said) {
 		progress.step(from, "reading the report")
-		directory := project.buildDirOf(entry)
-		titles := project.testTitles(entry)
-		echo testreport.render(directory, titles, said)
+		echo testreport.render(project.buildDirOf(entry), titles, said)
 		// A failing suite is a failing command, which is what makes `hive test`
 		// the thing a commit hook or a CI step runs.
-		if testreport.allPassed(titles, said) == false {
+		if testreport.failures(titles, said) > 0 {
 			hive.term.exit(1)
 		}
 	}
+}
+
+// `hive test <directory>`: every test under it, and every test outside it that a
+// file under it imports, each file's tests run once.
+proc suites(directory: Str, from: Int): void {
+	progress.step(from, "finding the tests under {directory}")
+	mut project.Reached[dyn] reached = []
+	mut broken := 0
+	for each file in project.hiveFilesUnder(directory) {
+		found := project.reached(file)
+		if found is Result.Error(errors) {
+			tell(errors)
+			broken = broken + 1
+		} else if found is Result.Ok(r) {
+			append(reached, r)
+		}
+	}
+	planned := project.plan(reached)
+	if len(planned) == 0 && broken == 0 {
+		echo "No tests under {directory} (" + progress.took(progress.since(from)) + ")"
+		return
+	}
+	mut passed := 0
+	mut failed := 0
+	for each p in planned {
+		echo p.entry
+		answered := project.runTests(p.entry, p.titles, from)
+		if answered is Result.Error(errors) {
+			tell(errors)
+			broken = broken + 1
+		} else if answered is Result.Ok(said) {
+			echo testreport.render(project.buildDirOf(p.entry), p.titles, said)
+			missed := testreport.failures(p.titles, said)
+			failed = failed + missed
+			passed = passed + len(p.titles) - missed
+		}
+		echo ""
+	}
+	echo totals(len(planned), passed, failed, broken)
+	if failed > 0 || broken > 0 {
+		hive.term.exit(1)
+	}
+}
+
+func totals(programs: Int, passed: Int, failed: Int, broken: Int): Str {
+	said := "  " + progress.counted(programs, "program") + ", " + text.trim(testreport.tally(passed, failed))
+	if broken > 0 {
+		return said + "; {broken} did not compile"
+	}
+	return said
 }
 
 // A score per `proc` and `func`, the copies and loops behind it, and an HTML page
@@ -289,10 +344,14 @@ proc report(errors: diag.Diagnostic[], quiet: Str, from: Int): void {
 // front of that would break it. Standard error, so `hive emit x.hive > main.go`
 // never writes one into the Go.
 proc complain(errors: diag.Diagnostic[]): void {
+	tell(errors)
+	hive.term.exit(1)
+}
+
+proc tell(errors: diag.Diagnostic[]): void {
 	for each e in errors {
 		hive.term.status(diag.render(e))
 	}
-	hive.term.exit(1)
 }
 
 // A mistake in what was typed rather than in any source, so it says who is
@@ -378,6 +437,7 @@ proc usage(): void {
 	echo "  hive export    <entrypoint.hive>       Package as an app, with --target android/arm64"
 	echo "  hive run       <entrypoint.hive> [..]  Compile and run"
 	echo "  hive test      <entrypoint.hive>       Run the program's tests, with coverage"
+	echo "  hive test      <directory>             Run every test under it, git-ignored files aside"
 	echo "  hive analyze   <entrypoint.hive>       Score what it will cost, and write a page"
 	echo "  hive container <entrypoint.hive>       Write a Dockerfile that builds and runs it"
 	echo "  hive agents                            Write .hivedocs/ for a coding agent to read"

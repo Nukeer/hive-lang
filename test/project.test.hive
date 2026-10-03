@@ -4,10 +4,13 @@
 // what the toolchain is given for a target, what its answer is read as, and what
 // the executable ends up called. Everything else in that file writes a Go module
 // or runs `go` over one, and the end-to-end suite is where those are exercised.
+import ../src/paths
 import ../src/project
 import ../src/shim
 import ../src/text
+import hive.file
 import hive.map
+import hive.term
 
 test "no target hands the toolchain no environment at all" {
 	// The whole of why a build for this machine is unchanged: an empty overlay
@@ -92,6 +95,66 @@ test "whether the target wants a console is the target's own question" {
 test "progress says which platform a build is for, and only then" {
 	assert project.saying("") == ""
 	assert project.saying("linux/arm64") == " — linux/arm64"
+}
+
+test "a file imported from under the directory has its tests run once, in the importer's program" {
+	x := project.Reached("x.hive", "x.hive", [project.Titled("x.hive", "x works")])
+	y := project.Reached("y.hive", "y.hive", [project.Titled("x.hive", "x works"), project.Titled("y.hive", "y works")])
+	assert described(project.plan([x, y])) == "y.hive: x works, y works"
+}
+
+test "tests outside the directory run in the program of a file under it that imports them" {
+	app := project.Reached("app.hive", "app.hive", [project.Titled("../lib/l.hive", "l works")])
+	assert described(project.plan([app])) == "app.hive: l works"
+}
+
+test "a program with no tests of its own and none from outside is not compiled" {
+	app := project.Reached("app.hive", "app.hive", [project.Titled("x.hive", "x works")])
+	x := project.Reached("x.hive", "x.hive", [project.Titled("x.hive", "x works")])
+	assert described(project.plan([app, x])) == "x.hive: x works"
+}
+
+test "two importers of one file run its tests once between them" {
+	x := project.Reached("x.hive", "x.hive", [project.Titled("x.hive", "x works")])
+	y := project.Reached("y.hive", "y.hive", [project.Titled("x.hive", "x works"), project.Titled("y.hive", "y works")])
+	w := project.Reached("w.hive", "w.hive", [project.Titled("x.hive", "x works"), project.Titled("w.hive", "w works")])
+	assert described(project.plan([x, y, w])) == "w.hive: w works; y.hive: x works, y works"
+}
+
+test "a file git ignores is not one of the files under a directory" {
+	put("_tree/.gitignore", "ignored/\n")
+	put("_tree/a.hive", "")
+	put("_tree/sub/b.hive", "")
+	put("_tree/ignored/c.hive", "")
+	put("_tree/notes.txt", "")
+	assert hive.term.exec("git", ["init", "--quiet"], "_tree") is Result.Ok(_)
+	assert join(sort(project.hiveFilesUnder("_tree")), ",") == "_tree/a.hive,_tree/sub/b.hive"
+}
+
+test "without git every Hive file is under the directory but hidden ones" {
+	put("_walk/a.hive", "")
+	put("_walk/sub/b.hive", "")
+	put("_walk/.hidden/c.hive", "")
+	mut Str[dyn] found = []
+	project.walk("_walk", found)
+	assert join(sort(found), ",") == "_walk/a.hive,_walk/sub/b.hive"
+}
+
+func described(planned: project.Planned[]): Str {
+	mut Str[dyn] out = []
+	for each p in planned {
+		append(out, p.entry + ": " + join(p.titles, ", "))
+	}
+	return join(out, "; ")
+}
+
+proc put(path: Str, contents: Str): void {
+	if hive.file.makeDir(paths.dirOf(path)) is Result.Error(why) {
+		panic "could not make the directory for {path}: {why.message}"
+	}
+	if hive.file.write(path, contents) is Result.Error(why) {
+		panic "could not write {path}: {why.message}"
+	}
 }
 
 // The value under a key, or `""` where there is none — so a missing pair fails

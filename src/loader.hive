@@ -66,14 +66,19 @@ type Load {
 
 // Load the program rooted at `entry` and flatten it.
 proc load(entry: Str): Program {
-	mut Load l = Load([], [], [], fetch.readLock(entry), [])
-	key := paths.normalise(entry)
-	loadFile(l, key, entry, entry, 0)
-	fetch.writeLock(l.lock)
-	if len(l.errors) > 0 {
-		return Program(ast.Module([], [], []), l.sources, l.errors)
+	walked := reach(entry)
+	if len(walked.errors) > 0 {
+		return walked
 	}
-	return flatten(l.sources, key, l.errors)
+	return flatten(walked.sources, paths.normalise(entry), walked.errors)
+}
+
+// Every file the program rooted at `entry` reaches, walked but not flattened.
+proc reach(entry: Str): Program {
+	mut Load l = Load([], [], [], fetch.readLock(entry), [])
+	loadFile(l, paths.normalise(entry), entry, entry, 0)
+	fetch.writeLock(l.lock)
+	return Program(ast.Module([], [], []), l.sources, l.errors)
 }
 
 // Load a program already in memory, under a name to report against — what a

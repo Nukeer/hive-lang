@@ -2006,6 +2006,10 @@ func testing(): Str {
 		they are about or in a file of their own; a file holding only tests needs no
 		~BT~main~BT~, and a run covers **every test in every file the entrypoint reaches**.
 
+		**~BT~hive test <directory>~BT~** (~BT~hive test .~BT~) needs no entrypoint: it runs the
+		tests of every ~BT~.hive~BT~ file under it that git does not ignore, and of every file
+		outside it that one of those imports, each file's tests exactly once.
+
 		## ~BT~assert~BT~ means the same thing and does something different
 
 		In ordinary code a failed assertion has proved the **program** wrong, so it
@@ -2089,6 +2093,7 @@ func cli(): Str {
 		hive export    <entrypoint.hive>       Package as an app, for a handset
 		hive run       <entrypoint.hive> [..]  Compile and run
 		hive test      <entrypoint.hive>       Run the program's tests, with coverage
+		hive test      <directory>             Run every test under it, git-ignored files aside
 		hive analyze   <entrypoint.hive>       Score what it will cost, and write a page
 		hive container <entrypoint.hive>       Write a Dockerfile that builds and runs it
 		hive agents                            Write .hivedocs/ for coding agents
