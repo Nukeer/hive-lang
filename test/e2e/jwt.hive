@@ -16,7 +16,7 @@ type Note {
 	body: Str
 }
 
-func secret(): Str { return "s3cret" }
+func secret(): Secret { return bypass("s3cret") }
 
 // Far enough ahead that the token is the same string every run.
 func distantFuture(): Int { return 4102444800 }
@@ -32,7 +32,7 @@ proc main(): void {
 
 	// --- What a token can be wrong about -------------------------------------
 	// The wrong secret.
-	if Claims.decode(token, hive.crypto.jwtCodec("not-the-secret")) is Result.Error(why) {
+	if Claims.decode(token, hive.crypto.jwtCodec(bypass("not-the-secret"))) is Result.Error(why) {
 		echo "{why.path}: expected {why.expected}, found {why.found}"
 	}
 

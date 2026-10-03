@@ -1,0 +1,54 @@
+package hive
+
+import (
+	"runtime"
+	"testing"
+	"time"
+)
+
+func TestADroppedSecretIsCleared(t *testing.T) {
+	s := Hide("hunter2").Ok()
+	held := s.bytes()
+	s = Secret{}
+	deadline := time.Now().Add(5 * time.Second)
+	for string(held) != "\x00\x00\x00\x00\x00\x00\x00" {
+		if time.Now().After(deadline) {
+			t.Fatalf("still holds %q after it was dropped", held)
+		}
+		runtime.GC()
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestAnArenaIsUnlockedOnceEmpty(t *testing.T) {
+	first := Hide("x").Ok()
+	arena := secretOpen
+	for secretOpen == arena {
+		Hide(string(make([]byte, secretArenaSize/4)))
+	}
+	runtime.KeepAlive(first)
+	first = Secret{}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		secretMu.Lock()
+		live := arena.live
+		secretMu.Unlock()
+		if live == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d secrets still counted in a full arena", live)
+		}
+		runtime.GC()
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestEqualityIsByContent(t *testing.T) {
+	if !Eq(Hide("a").Ok(), Bypass("a")) || Eq(Bypass("a"), Bypass("b")) || Eq(Bypass("a"), Bypass("ab")) {
+		t.Fatalf("== compared something other than what the secrets hold")
+	}
+	if Show(Bypass("a")) != "<secret>" {
+		t.Fatalf("a secret printed as %q", Show(Bypass("a")))
+	}
+}

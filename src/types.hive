@@ -43,6 +43,8 @@ type Ty {
 	TLib { module: Str, name: Str }
 	// `Address` — a service, which a call sends to.
 	TAddress
+	// `Secret` — text kept out of swap, which nothing prints.
+	TSecret
 	// A type variable, which is what makes a callable generic in it.
 	TVar { name: Str }
 	// No answer. Everything that produces one has already reported why.
@@ -227,6 +229,12 @@ func isVariable(t: Table, name: Str): Bool {
 func isBuiltinType(name: Str): Bool {
 	return name == "Str" || name == "Int" || name == "Float" || name == "Bool"
 		|| name == "Atom" || name == "Table" || name == "Result" || name == "Address"
+		|| name == "Secret" || name == "SecretError"
+}
+
+// What making a `Secret` fails with: a library type the core owns, so of no module.
+func secretError(): Ty {
+	return Ty.TLib("", "SecretError")
 }
 
 // --- Resolving a written type ------------------------------------------------
@@ -276,6 +284,12 @@ func resolveBase(t: Table, pkg: Str, name: Str, args: ast.TypeExpr[]): Ty {
 	if pkg == "hive" && name == "Address" {
 		return Ty.TAddress()
 	}
+	if pkg == "hive" && name == "Secret" {
+		return Ty.TSecret()
+	}
+	if pkg == "hive" && name == "SecretError" {
+		return secretError()
+	}
 	if text.startsWith(pkg, "hive.") {
 		return Ty.TLib(text.span(text.chars(pkg), 5, len(pkg) - 1), name)
 	}
@@ -301,6 +315,12 @@ func resolveBare(t: Table, name: Str, args: ast.TypeExpr[]): Ty {
 	// After the declarations, which win over a builtin here as everywhere.
 	if name == "Address" {
 		return Ty.TAddress()
+	}
+	if name == "Secret" {
+		return Ty.TSecret()
+	}
+	if name == "SecretError" {
+		return secretError()
 	}
 	return Ty.TVar(name)
 }
@@ -328,10 +348,16 @@ func toWritten(ty: Ty): ast.TypeExpr {
 	if ty is Ty.TNamed(name) { return named(name) }
 	if ty is Ty.TVar(name) { return named(name) }
 	if ty is Ty.TLib(module, name) {
+		if module == "" {
+			return ast.TypeExpr.Named("hive", name, [], [])
+		}
 		return ast.TypeExpr.Named("hive." + module, name, [], [])
 	}
 	if ty is Ty.TAddress {
 		return ast.TypeExpr.Named("hive", "Address", [], [])
+	}
+	if ty is Ty.TSecret {
+		return ast.TypeExpr.Named("hive", "Secret", [], [])
 	}
 	if ty is Ty.TVec(element, dim) {
 		return withDim(toWritten(element), dim)
@@ -397,8 +423,14 @@ func show(ty: Ty): Str {
 	else if ty is Ty.TUnknown { return "?" }
 	else if ty is Ty.TVar(name) { return name }
 	else if ty is Ty.TNamed(name) { return shownName(name) }
-	else if ty is Ty.TLib(module, name) { return "hive.{module}.{name}" }
+	else if ty is Ty.TLib(module, name) {
+		if module == "" {
+			return name
+		}
+		return "hive.{module}.{name}"
+	}
 	else if ty is Ty.TAddress { return "Address" }
+	else if ty is Ty.TSecret { return "Secret" }
 	else if ty is Ty.TVec(element, dim) { return show(element) + showDim(dim) }
 	else if ty is Ty.TResult(ok, bad) { return "Result<" + show(ok) + ", " + show(bad) + ">" }
 	else if ty is Ty.TMap(key, value) { return "hive.map.Map<" + show(key) + ", " + show(value) + ">" }
@@ -442,6 +474,51 @@ func showDim(d: ast.Dim): Str {
 }
 
 // --- Questions the passes ask ------------------------------------------------
+
+// Whether `ty` is, or anywhere holds, a type `wanted` says yes to.
+func holds(t: Table, ty: Ty, wanted: func(Ty): Bool, seen: Str[]): Bool {
+	if wanted(ty) {
+		return true
+	}
+	if ty is Ty.TVec(element, _) {
+		return holds(t, element, wanted, seen)
+	}
+	if ty is Ty.TResult(ok, bad) {
+		return holds(t, ok, wanted, seen) || holds(t, bad, wanted, seen)
+	}
+	if ty is Ty.TMap(_, value) {
+		return holds(t, value, wanted, seen)
+	}
+	if ty is Ty.TNamed(name) {
+		if indexOf(seen, name) is Result.Ok(_) {
+			return false
+		}
+		if findType(t, name) is Result.Ok(info) {
+			inner := seen + [name]
+			for each f in info.shared {
+				if holds(t, resolve(t, f.declared), wanted, inner) {
+					return true
+				}
+			}
+			for each v in info.variants {
+				for each f in v.fields {
+					if holds(t, resolve(t, f.declared), wanted, inner) {
+						return true
+					}
+				}
+			}
+		}
+	}
+	return false
+}
+
+func holdsSecret(t: Table, ty: Ty): Bool {
+	return holds(t, ty, isSecret, [])
+}
+
+func isSecret(ty: Ty): Bool {
+	return ty is Ty.TSecret
+}
 
 func isTable(ty: Ty): Bool {
 	if ty is Ty.TVec(row, outer) {
@@ -554,6 +631,7 @@ func same(a: Ty, b: Ty): Bool {
 		return false
 	}
 	if a is Ty.TAddress { return b is Ty.TAddress }
+	if a is Ty.TSecret { return b is Ty.TSecret }
 	if a is Ty.TVec(aElement, aDim) {
 		if b is Ty.TVec(bElement, bDim) { return same(aElement, bElement) && sameDim(aDim, bDim) }
 		return false
@@ -810,7 +888,7 @@ func orderedIn(t: Table, ty: Ty, enumerated: func(Str, Str): Bool, seen: Str[]):
 	if ty is Ty.TLib(module, name) {
 		return enumerated(module, name)
 	}
-	if ty is Ty.TFragment(_) || ty is Ty.TCodec(_) || ty is Ty.TVoid || ty is Ty.TAddress {
+	if ty is Ty.TFragment(_) || ty is Ty.TCodec(_) || ty is Ty.TVoid || ty is Ty.TAddress || ty is Ty.TSecret {
 		return false
 	}
 	if ty is Ty.TVec(element, _) {

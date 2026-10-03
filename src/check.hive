@@ -518,6 +518,9 @@ proc checkJsonShape(c: mut Check, what: Str, ty: types.Ty, format: Str): void {
 		}
 		report(c, what + " cannot carry " + carried + ": " + stdlib.tableHasNoJson())
 	}
+	if types.holdsSecret(c.table, ty) {
+		report(c, what + " cannot carry " + types.show(ty) + ": " + stdlib.secretHasNoJson())
+	}
 }
 
 // Where a `Table` sits in `ty`: `""` for `ty` itself, or the field holding one.
@@ -924,12 +927,14 @@ proc checkStmtTail(c: mut Check, env: infer.Env, s: ast.Stmt): infer.Env {
 		return env
 	} else if s is ast.Stmt.EchoStmt(value) {
 		checkExpr(c, env, value)
+		checkShown(c, env, value, "`echo`")
 		return env
 	} else if s is ast.Stmt.AssertStmt(condition) {
 		checkCondition(c, env, condition)
 		return env
 	} else if s is ast.Stmt.PanicStmt(value) {
 		checkExpr(c, env, value)
+		checkShown(c, env, value, "`panic`")
 		return env
 	} else if s is ast.Stmt.AsyncStmt(call) {
 		checkAsync(c, env, call)
@@ -1096,6 +1101,7 @@ proc checkExpr(c: mut Check, env: infer.Env, e: ast.Expr): void {
 		for each part in parts {
 			if part is ast.InterpPart.Expression(value) {
 				checkExpr(c, env, value)
+				checkShown(c, env, value, "an interpolation")
 			}
 		}
 	} else if e is ast.Expr.IsMatch(subject, pattern) {
@@ -1105,6 +1111,16 @@ proc checkExpr(c: mut Check, env: infer.Env, e: ast.Expr): void {
 		checkName(c, env, name)
 	} else if e is ast.Expr.Member(subject, field) {
 		checkMember(c, env, subject, field)
+	}
+}
+
+// Only `reveal` turns a `Secret` into text, so nothing that shows a value shows one.
+proc checkShown(c: mut Check, env: infer.Env, value: ast.Expr, what: Str): void {
+	ty := infer.typeOf(env, value)
+	if ty is types.Ty.TSecret {
+		report(c, what + " cannot show a `Secret`: only `reveal` turns one into text")
+	} else if types.holdsSecret(c.table, ty) {
+		report(c, what + " cannot show " + types.show(ty) + ", which holds a `Secret`: only `reveal` turns one into text")
 	}
 }
 
@@ -1188,6 +1204,7 @@ proc checkMember(c: mut Check, env: infer.Env, subject: ast.Expr, field: Str): v
 func hasNoFields(ty: types.Ty): Bool {
 	return ty is types.Ty.TStr || ty is types.Ty.TInt || ty is types.Ty.TFloat
 		|| ty is types.Ty.TBool || ty is types.Ty.TAtom || ty is types.Ty.TAddress
+		|| ty is types.Ty.TSecret
 		|| ty is types.Ty.TFn(_, _, _, _) || ty is types.Ty.TVec(_, _)
 		|| ty is types.Ty.TResult(_, _) || ty is types.Ty.TMap(_, _)
 }
@@ -1298,7 +1315,7 @@ proc checkOperandKind(c: mut Check, op: ast.BinOp, ty: types.Ty): void {
 	spelled := "`" + ast.opSpelling(op) + "`"
 	number := ty is types.Ty.TInt || ty is types.Ty.TFloat
 	if op is ast.BinOp.Eq || op is ast.BinOp.Neq {
-		if holdsFunction(c.table, ty, []) {
+		if types.holds(c.table, ty, isFunction, []) {
 			report(c, spelled + " compares two values, and a function value has no equality to compare — two that do the same thing cannot be told from two that do not. Compare what they answer with instead")
 		}
 	} else if op is ast.BinOp.Lt || op is ast.BinOp.Gt || op is ast.BinOp.Le || op is ast.BinOp.Ge {
@@ -1315,40 +1332,8 @@ proc checkOperandKind(c: mut Check, op: ast.BinOp, ty: types.Ty): void {
 	}
 }
 
-func holdsFunction(t: types.Table, ty: types.Ty, seen: Str[]): Bool {
-	if ty is types.Ty.TFn(_, _, _, _) {
-		return true
-	}
-	if ty is types.Ty.TVec(element, _) {
-		return holdsFunction(t, element, seen)
-	}
-	if ty is types.Ty.TResult(ok, bad) {
-		return holdsFunction(t, ok, seen) || holdsFunction(t, bad, seen)
-	}
-	if ty is types.Ty.TMap(_, value) {
-		return holdsFunction(t, value, seen)
-	}
-	if ty is types.Ty.TNamed(name) {
-		if indexOf(seen, name) is Result.Ok(_) {
-			return false
-		}
-		if types.findType(t, name) is Result.Ok(info) {
-			inner := seen + [name]
-			for each f in info.shared {
-				if holdsFunction(t, types.resolve(t, f.declared), inner) {
-					return true
-				}
-			}
-			for each v in info.variants {
-				for each f in v.fields {
-					if holdsFunction(t, types.resolve(t, f.declared), inner) {
-						return true
-					}
-				}
-			}
-		}
-	}
-	return false
+func isFunction(ty: types.Ty): Bool {
+	return ty is types.Ty.TFn(_, _, _, _)
 }
 
 // --- Calls -------------------------------------------------------------------
@@ -1931,6 +1916,14 @@ proc checkBuiltinCall(c: mut Check, env: infer.Env, name: Str, written: ast.Arg[
 		if arity(c, name, args, 1) {
 			fits(c, types.Ty.TAddress(), typeOfArg(c, env, args, 0), "what `kill` stops")
 		}
+	} else if name == "hide" || name == "bypass" {
+		if arity(c, name, args, 1) {
+			fits(c, types.Ty.TStr(), typeOfArg(c, env, args, 0), "what `{name}` keeps")
+		}
+	} else if name == "reveal" {
+		if arity(c, name, args, 1) {
+			fits(c, types.Ty.TSecret(), typeOfArg(c, env, args, 0), "what `reveal` reads")
+		}
 	} else if name == "row" || name == "column" {
 		if arity(c, name, args, 2) {
 			fits(c, table(), typeOfArg(c, env, args, 0), "what `{name}` reads")
@@ -1978,7 +1971,7 @@ proc checkSort(c: mut Check, env: infer.Env, args: ast.Arg[]): void {
 	if len(args) == 1 {
 		if isVector(subject) && types.isOrdered(env.table, element, isEnumeration) == false {
 			report(c, "`sort` puts a vector in its elements' own order, and " + types.show(element)
-				+ " has none: a map, an address and a function value have no order, and nor does a type holding one. Hand `sort` the `func` that says which of two comes first")
+				+ " has none: a map, an address, a `Secret` and a function value have no order, and nor does a type holding one. Hand `sort` the `func` that says which of two comes first")
 		}
 		return
 	}

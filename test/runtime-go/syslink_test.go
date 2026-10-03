@@ -15,13 +15,13 @@ func TestSetKeyIsUsedAndNeverSaved(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("HIVE_SYSLINK_KEY", "from the environment")
 
-	SyslinkSetKey("first")
-	if got, err := clusterSecret(); err != nil || string(got) != "first" {
-		t.Fatalf("after setKey(first) the key is %q (%v)", got, err)
+	SyslinkSetKey(Bypass("first"))
+	if got, err := clusterSecret(); err != nil || Reveal(got) != "first" {
+		t.Fatalf("after setKey(first) the key is %q (%v)", Reveal(got), err)
 	}
-	SyslinkSetKey("second")
-	if got, err := clusterSecret(); err != nil || string(got) != "second" {
-		t.Fatalf("after setKey(second) the key is %q (%v)", got, err)
+	SyslinkSetKey(Bypass("second"))
+	if got, err := clusterSecret(); err != nil || Reveal(got) != "second" {
+		t.Fatalf("after setKey(second) the key is %q (%v)", Reveal(got), err)
 	}
 
 	if _, err := os.Stat(filepath.Join(home, ".hive", "syslink.key")); !os.IsNotExist(err) {
@@ -38,5 +38,5 @@ func TestAnEmptyKeyIsRefused(t *testing.T) {
 			t.Fatalf("setKey(\"\") was accepted")
 		}
 	}()
-	SyslinkSetKey("")
+	SyslinkSetKey(Bypass(""))
 }

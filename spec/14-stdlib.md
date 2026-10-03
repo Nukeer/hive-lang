@@ -124,7 +124,8 @@ own, carrying the `path` and a `message`.
 * `write(path, contents)` replaces a file, creating it when absent;
   `append(path, contents)` adds to the end. Both → `Result<Int, _>`, the bytes
   written. Neither creates missing parent directories.
-* `writeSecret(path, contents)` → `Result<Int, _>` is `write` leaving the file
+* `writeSecret(path, contents)` → `Result<Int, _>` is `write` of a
+  [`Secret`](03-types.md#311-secret), leaving the file
   readable by the user running the program and nobody else: mode `0600` on Linux
   and macOS, and on Windows an access list naming that one account, protected so
   the containing folder hands nothing down. Who may read it is settled before any
@@ -157,10 +158,11 @@ Line-oriented terminal I/O.
 * `read()` blocks for a line of input, stripped of its trailing newline. It parks
   only the calling virtual thread. At end of input it returns whatever preceded
   EOF (`""` if nothing).
-* `readSecret()` is that same read with the terminal's echo turned off. The echo
-  is put back before the call returns, and also if the program is interrupted at
-  the prompt. Where there is no terminal at all, the line is read exactly as
-  `read()` reads it and only the hiding of it is lost.
+* `readSecret()` → `Result<Secret, SecretError>` ([3.11](03-types.md#311-secret)) is that same read with the
+  terminal's echo turned off, read straight into locked memory rather than
+  through a `Str`. The echo is put back before the call returns, and also if the
+  program is interrupted at the prompt. Where there is no terminal at all, the
+  line is read exactly as `read()` reads it and only the hiding of it is lost.
 * `args()` → `Str[dyn]`, the command-line arguments in order, excluding the
   program name.
 * `codec()` → `hive.codec.Codec<hive.term.FlagError>` says **read and write it
@@ -375,7 +377,8 @@ type JsonValue {
 **A `Table` has no JSON.** It is rows of cells with nothing to name them, so
 `encode`, `T.decode` and a message crossing [`hive.syslink`](#1410-hivesyslink)
 refuse one wherever it sits in the value — `Str[dyn][dyn]` being the same type —
-and `Table.decode` does not exist.
+and `Table.decode` does not exist. **Nor has a [`Secret`](03-types.md#311-secret)**,
+refused the same way: only `reveal` turns one into text.
 
 ## 14.8 `hive.crypto`
 
@@ -383,21 +386,26 @@ Pure, so it works in a `func` too. Fallible operations return
 `Result<_, hive.crypto.CryptoError>`, whose `reason` is a short tag such as
 `"BadSignature"`, `"Expired"` or `"Malformed"`.
 
+A key, a password and a plaintext are each a [`Secret`](03-types.md#311-secret);
+a digest, a ciphertext and a token are `Str`s, safe to print and store.
+
 * **Hashing** — `sha256(input)`, `sha512(input)` (lowercase hex),
-  `hmacSha256(input, key)`.
-* **Encryption** — `encrypt(plaintext, password)` seals under a password with
-  AES-256-GCM, base64-encoded; `decrypt(ciphertext, password)` opens it →
-  `Result<Str, _>`. The key is derived with 600,000 rounds of PBKDF2-HMAC-SHA256
+  `hmacSha256(input, key: Secret)`.
+* **Encryption** — `encrypt(plaintext: Secret, password: Secret)` → `Str` seals
+  under a password with AES-256-GCM, base64-encoded;
+  `decrypt(ciphertext, password: Secret)` opens it → `Result<Secret, _>`, straight
+  into locked memory, its `reason` a `SecretError`'s where none could be locked. The key is derived with 600,000 rounds of PBKDF2-HMAC-SHA256
   over a random salt, and the salt and nonce are drawn afresh every call, so the
   same text under the same password never encrypts alike. GCM's tag travels with
   the ciphertext, so an edited message is rejected rather than opened into
   something else — `"BadSignature"`, which is also what a wrong password gives.
 * **Encoding** — `base64Encode`, `base64Decode`.
-* **Random** — `randomHex(bytes)`.
-* **JWT** — `jwtCodec(secret)` → `hive.codec.Codec<hive.crypto.JwtError>` says **read and write it as
+* **Random** — `randomHex(bytes)`, and `randomSecret(bytes)` →
+  `Result<Secret, SecretError>`, the same hex drawn and written in locked memory.
+* **JWT** — `jwtCodec(secret: Secret)` → `hive.codec.Codec<hive.crypto.JwtError>` says **read and write it as
   an HS256 token under this secret**, and is the whole of what this module
-  contributes to tokens: `encode(claims, hive.crypto.jwtCodec(secret))` signs one
-  and `T.decode(token, hive.crypto.jwtCodec(secret))` checks the signature and
+  contributes to tokens: `encode(claims, hive.crypto.jwtCodec(key))` signs one
+  and `T.decode(token, hive.crypto.jwtCodec(key))` checks the signature and
   the `exp`/`nbf` claims before reading them ([14.7](#147-hivejson)). Only HS256
   is accepted, so `alg: none` and algorithm confusion are rejected outright. A
   token that does not check out is a `hive.crypto.JwtError` like claims of the
@@ -535,7 +543,8 @@ What the module has:
 * `monitor(watcher, target, notice)` posts `notice` to `watcher` — a service on
   this node — when `target` dies; an already-dead target reports at once.
 * `listen(endpoint)`, `node()`, `peers()`.
-* `setKey(key)` makes `key` this program's cluster key — see below.
+* `setKey(key)` makes `key`, a [`Secret`](03-types.md#311-secret), this
+  program's cluster key — see below.
 
 **`listen` answers with the endpoint a peer should dial**, which is not always the
 one it was given: a port of `0` asks the kernel to choose, and what comes back —
@@ -600,7 +609,7 @@ else `HIVE_SYSLINK_KEY`, else `~/.hive/syslink.key`, which is created on first u
   creates the file at all.
 * **It applies from the next connection on**, made or accepted. One already open
   was proved with the key it opened under, and stays open.
-* An empty key proves nothing about who holds it, so `setKey("")` panics.
+* An empty key proves nothing about who holds it, so `setKey(bypass(""))` panics.
 
 ## 14.11 `hive.task`
 
@@ -650,7 +659,11 @@ Times are plain `Int`s — Unix seconds.
   order: the `.env` file beside the executable; the one in the working directory
   — the entrypoint's folder, under `hive run`; the `.env` in the parent folder of
   either; the OS environment. The first file to name a key wins.
-* The `.env` file is read **once**, on the first `get`. Blank lines and `#`
+* `getSecret(name)` → `Result<Secret, hive.env.EnvironmentError>` is `get` as a
+  [`Secret`](03-types.md#311-secret). The environment and the `.env` file still
+  hold it as text; it is the program's own copy that is locked and unprintable.
+  Where none can be locked, the error's `message` says so.
+* The `.env` file is read **once**, on the first `get` or `getSecret`. Blank lines and `#`
   comments are ignored, an optional `export ` prefix is allowed, and a value may
   be wrapped in quotes, which are stripped.
 

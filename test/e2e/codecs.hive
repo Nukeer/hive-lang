@@ -42,12 +42,12 @@ proc main(): void {
 	}
 
 	// A JWT codec carries its secret wherever it is kept.
-	box := Outbox(hive.crypto.jwtCodec("s3cret"))
+	box := Outbox(hive.crypto.jwtCodec(bypass("s3cret")))
 	token := encode(Note("sealed", 5), box.codec)
 	if Note.decode(token, box.codec) is Result.Ok(n) {
 		echo "{n.body} {n.stars}"
 	}
-	if Note.decode(token, hive.crypto.jwtCodec("wrong")) is Result.Error(why) {
+	if Note.decode(token, hive.crypto.jwtCodec(bypass("wrong"))) is Result.Error(why) {
 		echo "{why.path}: expected {why.expected}"
 	}
 }

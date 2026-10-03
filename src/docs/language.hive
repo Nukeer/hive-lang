@@ -399,6 +399,25 @@ func types(): Str {
 		it has no order. It is one type rather than one per protocol. A program that
 		declares its own ~BT~Address~BT~ still has the builtin as ~BT~hive.Address~BT~.
 
+		## Secret
+
+		Text that must not leak: a password, a key, a token. ~BT~hide(text)~BT~ makes one and
+		~BT~reveal(secret)~BT~ is its text again; nothing else turns one into a ~BT~Str~BT~.
+
+		* **It is never shown.** ~BT~echo~BT~, ~BT~panic~BT~ and an interpolation of a ~BT~Secret~BT~, or of
+		  anything holding one, are compile errors. So is ~BT~encode~BT~, decoding, or sending one
+		  in a message: a ~BT~Secret~BT~ has no JSON.
+		* **It is never swapped to disk.** It lives in locked memory, cleared once nothing
+		  holds it. Locked memory runs out, so ~BT~hide~BT~ answers ~BT~Result<Secret, SecretError>~BT~,
+		  its ~BT~reason~BT~ ~BT~"LimitExceeded"~BT~ or ~BT~"Unsupported"~BT~.
+		* ~BT~bypass(text)~BT~ is a ~BT~Secret~BT~ in ordinary memory: never shown, but free to be
+		  swapped out, and it cannot fail. For a literal, or a ciphertext.
+		* ~BT~==~BT~ compares what two hold, in constant time; there is no order.
+		* ~BT~hive.term.readSecret~BT~, ~BT~hive.env.getSecret~BT~ and ~BT~hive.crypto.randomSecret~BT~
+		  hand one over without it ever being a ~BT~Str~BT~ first, each as a ~BT~Result~BT~.
+		* A program that declares its own ~BT~Secret~BT~ or ~BT~SecretError~BT~ still has the
+		  builtin as ~BT~hive.Secret~BT~ or ~BT~hive.SecretError~BT~.
+
 		## Assignability
 
 		A value of type ~BT~S~BT~ fits where ~BT~T~BT~ is expected exactly when:
@@ -1686,6 +1705,9 @@ func builtins(): Str {
 		| ~BT~spawn~BT~ | ~BT~(handler, S): Result<Address, SyslinkError>~BT~ / ~BT~(handler, S, Atom): …~BT~ | starts a service, optionally registered under a name |
 		| ~BT~at~BT~ | ~BT~(Atom): Address~BT~ / ~BT~(Str, Atom): Address~BT~ | a named service on this node / on the node at an endpoint |
 		| ~BT~kill~BT~ | ~BT~(Address): void~BT~ | stops a service |
+		| ~BT~hide~BT~ | ~BT~(Str): Result<Secret, SecretError>~BT~ | text as a [~BT~Secret~BT~](types.md#secret), never swapped to disk |
+		| ~BT~bypass~BT~ | ~BT~(Str): Secret~BT~ | text as a ~BT~Secret~BT~ in ordinary memory; cannot fail |
+		| ~BT~reveal~BT~ | ~BT~(Secret): Str~BT~ | what a ~BT~Secret~BT~ holds, as text |
 
 		~BT~len~BT~ and ~BT~bytes~BT~ differ only for strings: for ~BT~"café"~BT~, ~BT~len~BT~ is ~BT~4~BT~ and ~BT~bytes~BT~
 		is ~BT~5~BT~. ~BT~replaceFirst~BT~ and ~BT~replaceAll~BT~ **answer with a new string**, take plain

@@ -325,6 +325,7 @@ func goType(ty: types.Ty): Str {
 		return "hive." + text.capitalise(module) + name
 	}
 	else if ty is types.Ty.TAddress { return "hive.SyslinkAddress" }
+	else if ty is types.Ty.TSecret { return "hive.Secret" }
 	else if ty is types.Ty.TFn(_, params, mutexes, result) {
 		mut Str[dyn] out = []
 		mut i := 0
@@ -2103,6 +2104,10 @@ proc equality(em: mut Emit, env: infer.Env, l: Str, r: Str, ty: types.Ty): Str {
 	if ty is types.Ty.TResult(_, _) {
 		return "hive.Eq(" + l + ", " + r + ")"
 	}
+	// Go's `==` would compare where two secrets are kept rather than what they hold.
+	if types.holdsSecret(env.table, ty) {
+		return "hive.Eq(" + l + ", " + r + ")"
+	}
 	if ty is types.Ty.TUnknown {
 		return "hive.Eq(" + l + ", " + r + ")"
 	}
@@ -2220,7 +2225,7 @@ proc withCodec(em: mut Emit, env: infer.Env, value: Str, codec: ast.Expr): Str {
 // codec carries.
 proc jwtSecret(em: mut Emit, env: infer.Env, codec: ast.Expr): Str {
 	if stdlib.codecFormat(codec) == "jwt" {
-		return expr(em, env, stdlib.codecSecret(codec), types.Ty.TStr())
+		return expr(em, env, stdlib.codecSecret(codec), types.Ty.TSecret())
 	}
 	return expr(em, env, codec, infer.typeOf(env, codec)) + ".Secret"
 }
@@ -2802,6 +2807,16 @@ proc builtin(em: mut Emit, env: infer.Env, name: Str, written: ast.Arg[], want: 
 	if name == "toTable" {
 		return "hive.ToTable(" + a + ", " + expr(em, env, argExpr(args, 1), types.Ty.TInt()) + ")"
 	}
+	if name == "hide" {
+		useModule(em, "secret")
+		return "hive.Hide(" + a + ")"
+	}
+	if name == "reveal" {
+		return "hive.Reveal(" + a + ")"
+	}
+	if name == "bypass" {
+		return "hive.Bypass(" + a + ")"
+	}
 	// The one builtin that is not a call on the runtime package: the encoder is
 	// written out of the argument's static type and the format its second
 	// argument names, which is what makes it total.
@@ -3191,7 +3206,7 @@ proc signatureOf(em: mut Emit, ty: types.Ty, seen: Str[]): Str {
 	if ty is types.Ty.TBool { return "Bool" }
 	if ty is types.Ty.TAtom { return "Atom" }
 	if ty is types.Ty.TVoid { return "void" }
-	if ty is types.Ty.TLib(module, name) { return "hive.{module}.{name}" }
+	if ty is types.Ty.TLib(_, _) { return types.show(ty) }
 	if ty is types.Ty.TAddress { return "Address" }
 	if ty is types.Ty.TVec(element, dim) {
 		return signatureOf(em, element, seen) + types.showDim(dim)
@@ -4177,6 +4192,10 @@ proc decoderRef(em: mut Emit, ty: types.Ty): Str {
 		fail(em, stdlib.tableHasNoJson())
 		return "hive.JsonStr"
 	}
+	if ty is types.Ty.TSecret {
+		fail(em, stdlib.secretHasNoJson())
+		return "hive.JsonStr"
+	}
 	if ty is types.Ty.TNamed(name) {
 		if types.findType(em.table, name) is Result.Ok(_) {
 			needCodec(em, name)
@@ -4242,6 +4261,10 @@ proc encodeOf(em: mut Emit, ty: types.Ty, value: Str, depth: Int): Str {
 	if ty is types.Ty.TAtom { return "hive.JsonEncodeAtom(" + value + ")" }
 	if types.isTable(ty) {
 		fail(em, stdlib.tableHasNoJson())
+		return "\"null\""
+	}
+	if ty is types.Ty.TSecret {
+		fail(em, stdlib.secretHasNoJson())
 		return "\"null\""
 	}
 	if ty is types.Ty.TNamed(name) {

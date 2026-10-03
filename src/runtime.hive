@@ -90,6 +90,10 @@ func moduleText(module: Str): Str {
 	if module == "time" { return timeSource() }
 	if module == "json" { return jsonSource() }
 	if module == "crypto" { return cryptoSource() }
+	if module == "secret" { return secretSource() }
+	if module == "secretunix" { return secretUnixSource() }
+	if module == "secretwindows" { return secretWindowsSource() }
+	if module == "secretother" { return secretOtherSource() }
 	if module == "resolver" { return resolverSource() }
 	if module == "net" { return netSource() }
 	if module == "sql" { return sqlSource() }
@@ -111,7 +115,15 @@ func moduleText(module: Str): Str {
 // `hive.json`, and checks the dates on one against the clock `hive.time` reads.
 func requires(module: Str): Str[dyn] {
 	if module == "crypto" {
-		return ["json", "time"]
+		return ["json", "time", "secret"]
+	}
+	// `getSecret` sits beside `get` and hides what it found.
+	if module == "env" {
+		return ["secret"]
+	}
+	// Locking memory is a file per platform, and the tag atop each picks one.
+	if module == "secret" {
+		return ["secretunix", "secretwindows", "secretother"]
 	}
 	// A format is written against the vocabulary `encode` and `decode` share,
 	// which is its own file so that a second format would add one rather than
@@ -131,7 +143,7 @@ func requires(module: Str): Str[dyn] {
 	// Turning a terminal's echo off is two files, one per platform, and the tag
 	// at the top of each leaves the other out of the build.
 	if module == "termsecret" {
-		return ["term", "termsecretunix", "termsecretwindows"]
+		return ["term", "termsecretunix", "termsecretwindows", "secret"]
 	}
 	// Writing one is the same shape: a file per platform, over the error
 	// `hive.file` already answers with.
@@ -142,7 +154,7 @@ func requires(module: Str): Str[dyn] {
 	// `hive.json` builds from a declaration, and the wire that carries it is its
 	// own file — one nothing in Hive source ever names.
 	if module == "syslink" {
-		return ["json", "syslinknet", "resolver"]
+		return ["json", "syslinknet", "resolver", "secret"]
 	}
 	// A window is a syslink service with a socket in front of it: the fold and
 	// the address come from `syslink`, the socket from `net`, and the token that
@@ -165,6 +177,7 @@ func coreSource(): Str {
 		coreResult(),
 		coreAtoms(),
 		coreShow(),
+		coreSecret(),
 		coreVectors(),
 		coreOrder(),
 		coreWalks(),
@@ -185,9 +198,11 @@ func coreHeader(): Str {
 		package hive
 
 		import (
+			"crypto/subtle"
 			"fmt"
 			"math"
 			"reflect"
+			"runtime"
 			"sort"
 			"strconv"
 			"strings"
@@ -400,6 +415,260 @@ func coreShow(): Str {
 		}
 		`
 	], "\n\n")
+}
+
+// What a `Secret` is wherever one is named. Making one is the `secret` module's,
+// since only that needs locked memory.
+func coreSecret(): Str {
+	return join([
+		// Secret is text kept where the operating system will not swap it out. Hide is
+		// the way in and Reveal the only way out.
+		`
+		type Secret struct\{ p *[]byte }
+
+		func (Secret) String() string \{ return "<secret>" }
+		`,
+		// bytes is what s holds. The caller keeps s alive with runtime.KeepAlive until
+		// it is done with them, or the cleanup that clears them can run underneath it.
+		`
+		func (s Secret) bytes() []byte \{
+			if s.p == nil \{
+				return nil
+			}
+			return *s.p
+		}
+
+		func Reveal(s Secret) string \{
+			defer runtime.KeepAlive(s)
+			return string(s.bytes())
+		}
+		`,
+		// Bypass is a Secret in ordinary memory: as unprintable as any, but free to be
+		// swapped out. Cleared all the same once nothing holds it.
+		`
+		func Bypass(text string) Secret \{
+			b := []byte(text)
+			s := Secret\{p: &b}
+			runtime.AddCleanup(s.p, func(b []byte) \{ clear(b) }, b)
+			return s
+		}
+		`,
+		// SecretError is why a Secret could not be made. Reason is "LimitExceeded" or
+		// "Unsupported".
+		`
+		type SecretError struct \{
+			Reason  string
+			Message string
+		}
+
+		func (e SecretError) Error() string \{
+			return "hive: secret " + e.Reason + ": " + e.Message
+		}
+		`,
+		// Constant time, so how long == takes says nothing about where two differ.
+		`
+		func (s Secret) equalTo(other any) bool \{
+			o, ok := other.(Secret)
+			defer runtime.KeepAlive(s)
+			defer runtime.KeepAlive(o)
+			return ok && subtle.ConstantTimeCompare(s.bytes(), o.bytes()) == 1
+		}
+		`
+	], "\n\n")
+}
+
+// The Go behind `hide`: memory the operating system will not swap out, handed
+// out a Secret at a time. Locking is the one part that differs per platform.
+func secretSource(): Str {
+	return join([
+		`
+		package hive
+
+		import (
+			"os"
+			"runtime"
+			"sync"
+			"unsafe"
+		)
+		`,
+		// Locked memory comes in arenas of whole pages, so unlocking one never unlocks
+		// a page something else still needs. A Secret is a slot in one.
+		//
+		// ponytail: an arena is unlocked only once every slot in it is dead; a free list would reuse slots sooner.
+		`
+		const secretArenaSize = 16 << 10
+
+		type secretArena struct \{
+			mem  []byte
+			used int
+			live int
+		}
+
+		type secretSlot struct \{
+			arena *secretArena
+			b     []byte
+		}
+
+		var (
+			secretMu   sync.Mutex
+			secretOpen *secretArena
+			secretPage = os.Getpagesize()
+		)
+
+		func Hide(text string) Result[Secret, SecretError] \{
+			s, err := newSecret(len(text))
+			if err != nil \{
+				return Err[Secret, SecretError](*err)
+			}
+			copy(s.bytes(), text)
+			return Ok[Secret, SecretError](s)
+		}
+
+		// hideBytes is Hide that clears what it was handed.
+		func hideBytes(b []byte) (Secret, *SecretError) \{
+			defer clear(b)
+			s, err := newSecret(len(b))
+			if err == nil \{
+				copy(s.bytes(), b)
+			}
+			return s, err
+		}
+		`,
+		// newSecret is n zero bytes of locked memory for its caller to fill, cleared
+		// once nothing holds the Secret any more.
+		`
+		func newSecret(n int) (Secret, *SecretError) \{
+			if n == 0 \{
+				return Secret\{p: new([]byte)}, nil
+			}
+			secretMu.Lock()
+			size := (n + 15) &^ 15
+			a := secretOpen
+			if a == nil || a.used+size > len(a.mem) \{
+				mem, err := lockedPages(max(size, secretArenaSize))
+				if err != nil \{
+					secretMu.Unlock()
+					return Secret\{}, err
+				}
+				if a != nil && a.live == 0 \{
+					unlockMemory(a.mem)
+				}
+				a = &secretArena\{mem: mem}
+				secretOpen = a
+			}
+			b := a.mem[a.used : a.used+n : a.used+n]
+			a.used += size
+			a.live++
+			secretMu.Unlock()
+			s := Secret\{p: &b}
+			runtime.AddCleanup(s.p, releaseSecret, secretSlot\{a, b})
+			return s, nil
+		}
+
+		func releaseSecret(slot secretSlot) \{
+			clear(slot.b)
+			secretMu.Lock()
+			defer secretMu.Unlock()
+			a := slot.arena
+			a.live--
+			if a.live > 0 \{
+				return
+			}
+			if a == secretOpen \{
+				a.used = 0
+				return
+			}
+			unlockMemory(a.mem)
+		}
+		`,
+		// lockedPages is n bytes, rounded up to whole pages, that will not be swapped
+		// out, or why they cannot be had.
+		`
+		func lockedPages(n int) ([]byte, *SecretError) \{
+			n = (n + secretPage - 1) / secretPage * secretPage
+			raw := make([]byte, n+secretPage)
+			skip := (secretPage - int(uintptr(unsafe.Pointer(&raw[0]))%uintptr(secretPage))) % secretPage
+			mem := raw[skip : skip+n : skip+n]
+			if err := lockMemory(mem); err != nil \{
+				reason := "LimitExceeded"
+				if !secretLockable \{
+					reason = "Unsupported"
+				}
+				return nil, &SecretError\{Reason: reason, Message: "cannot keep a Secret out of swap: " + err.Error()}
+			}
+			return mem, nil
+		}
+		`
+	], "\n\n")
+}
+
+func secretUnixSource(): Str {
+	return `
+		//go:build linux || darwin
+
+		package hive
+
+		import (
+			"errors"
+			"syscall"
+		)
+
+		const secretLockable = true
+
+		func lockMemory(b []byte) error \{
+			if err := syscall.Mlock(b); err != nil \{
+				return errors.New(err.Error() + " (the locked-memory limit is ulimit -l)")
+			}
+			return nil
+		}
+
+		func unlockMemory(b []byte) \{ syscall.Munlock(b) }
+	`
+}
+
+// ponytail: the lockable total is the minimum working set (about 200 KB by default); SetProcessWorkingSetSize raises it.
+func secretWindowsSource(): Str {
+	return `
+		//go:build windows
+
+		package hive
+
+		import (
+			"errors"
+			"syscall"
+			"unsafe"
+		)
+
+		const secretLockable = true
+
+		func lockMemory(b []byte) error \{
+			if err := syscall.VirtualLock(uintptr(unsafe.Pointer(&b[0])), uintptr(len(b))); err != nil \{
+				return errors.New(err.Error() + " (the limit is the process's minimum working set)")
+			}
+			return nil
+		}
+
+		func unlockMemory(b []byte) \{
+			syscall.VirtualUnlock(uintptr(unsafe.Pointer(&b[0])), uintptr(len(b)))
+		}
+	`
+}
+
+// Go's syscall package locks memory on these three alone.
+func secretOtherSource(): Str {
+	return `
+		//go:build !linux && !darwin && !windows
+
+		package hive
+
+		import "errors"
+
+		const secretLockable = false
+
+		func lockMemory(b []byte) error \{ return errors.New("this platform cannot lock memory") }
+
+		func unlockMemory(b []byte) \{}
+	`
 }
 
 func coreVectors(): Str {
@@ -1930,7 +2199,7 @@ func codecSource(): Str {
 		// time: the secret a JWT is signed with.
 		`
 		type CodecCodec[E any] struct \{
-			Secret string
+			Secret Secret
 		}
 
 		// String keeps a secret out of anything that prints a codec.
@@ -2163,6 +2432,21 @@ func envSource(): Str {
 				return Ok[string, EnvEnvironmentError](v)
 			}
 			return Err[string, EnvEnvironmentError](EnvEnvironmentError\{Key: name, Message: "not set"})
+		}
+		`,
+		// EnvGetSecret is EnvGet as a Secret. The environment and a .env file still
+		// hold it as text; only the program's own copy is locked.
+		`
+		func EnvGetSecret(name string) Result[Secret, EnvEnvironmentError] \{
+			got := EnvGet(name)
+			if got.IsError() \{
+				return Err[Secret, EnvEnvironmentError](got.Err())
+			}
+			hidden := Hide(got.Ok())
+			if hidden.IsError() \{
+				return Err[Secret, EnvEnvironmentError](EnvEnvironmentError\{Key: name, Message: hidden.Err().Message})
+			}
+			return Ok[Secret, EnvEnvironmentError](hidden.Ok())
 		}
 		`
 	], "\n\n")
@@ -3376,8 +3660,10 @@ func cryptoSource(): Str {
 			"encoding/base64"
 			"encoding/hex"
 			"encoding/json"
+			"runtime"
 			"strconv"
 			"strings"
+			"unsafe"
 		)
 		`,
 		// CryptoCryptoError says why a crypto operation failed (invalid base64, a bad
@@ -3403,8 +3689,8 @@ func cryptoSource(): Str {
 		`,
 		// hmacSha256Raw is the HMAC-SHA256 of input keyed by secret.
 		`
-		func hmacSha256Raw(secret string, input string) []byte \{
-			mac := hmac.New(sha256.New, []byte(secret))
+		func hmacSha256Raw(secret []byte, input string) []byte \{
+			mac := hmac.New(sha256.New, secret)
 			mac.Write([]byte(input))
 			return mac.Sum(nil)
 		}
@@ -3425,8 +3711,9 @@ func cryptoSource(): Str {
 		`,
 		// CryptoHmacSha256 returns the lowercase-hex HMAC-SHA256 of input under key.
 		`
-		func CryptoHmacSha256(input string, key string) string \{
-			return hex.EncodeToString(hmacSha256Raw(key, input))
+		func CryptoHmacSha256(input string, key Secret) string \{
+			defer runtime.KeepAlive(key)
+			return hex.EncodeToString(hmacSha256Raw(key.bytes(), input))
 		}
 		`,
 		// CryptoBase64Encode standard-base64-encodes input.
@@ -3456,6 +3743,23 @@ func cryptoSource(): Str {
 				return ""
 			}
 			return hex.EncodeToString(buf)
+		}
+		`,
+		// CryptoRandomSecret is CryptoRandomHex drawn and written in locked memory.
+		`
+		func CryptoRandomSecret(n int) Result[Secret, SecretError] \{
+			raw, err := newSecret(max(n, 0))
+			if err != nil \{
+				return Err[Secret, SecretError](*err)
+			}
+			defer runtime.KeepAlive(raw)
+			rand.Read(raw.bytes())
+			s, err := newSecret(2 * len(raw.bytes()))
+			if err != nil \{
+				return Err[Secret, SecretError](*err)
+			}
+			hex.Encode(s.bytes(), raw.bytes())
+			return Ok[Secret, SecretError](s)
 		}
 		`,
 		// What CryptoEncrypt writes and CryptoDecrypt reads, base64 over the lot:
@@ -3488,13 +3792,15 @@ func cryptoSource(): Str {
 		`,
 		// encryptCipher derives the key from password and salt and answers with AES-GCM
 		// under it. False if the platform has no AES, which is not something to carry
-		// on encrypting past.
+		// on encrypting past. The password is read in place rather than copied to the
+		// heap, though PBKDF2 and AES keep what they derive from it there.
 		`
-		func encryptCipher(password string, salt []byte, work int) (cipher.AEAD, bool) \{
-			key, err := pbkdf2.Key(sha256.New, password, salt, work, encryptKeyLen)
+		func encryptCipher(password []byte, salt []byte, work int) (cipher.AEAD, bool) \{
+			key, err := pbkdf2.Key(sha256.New, unsafe.String(unsafe.SliceData(password), len(password)), salt, work, encryptKeyLen)
 			if err != nil \{
 				return nil, false
 			}
+			defer clear(key)
 			block, err := aes.NewCipher(key)
 			if err != nil \{
 				return nil, false
@@ -3512,7 +3818,9 @@ func cryptoSource(): Str {
 		// GCM's tag is what lets CryptoDecrypt tell an edited message from an intact
 		// one. Backs hive.crypto.encrypt.
 		`
-		func CryptoEncrypt(plaintext string, password string) string \{
+		func CryptoEncrypt(plaintext Secret, password Secret) string \{
+			defer runtime.KeepAlive(plaintext)
+			defer runtime.KeepAlive(password)
 			salt := make([]byte, encryptSaltLen)
 		`,
 		// Since Go 1.24 this cannot fail: it fills the buffer or the program dies
@@ -3520,7 +3828,7 @@ func cryptoSource(): Str {
 		`
 			rand.Read(salt)
 			work, _ := encryptWork(encryptVersion)
-			sealer, ok := encryptCipher(password, salt, work)
+			sealer, ok := encryptCipher(password.bytes(), salt, work)
 			if !ok \{
 				return ""
 			}
@@ -3529,45 +3837,54 @@ func cryptoSource(): Str {
 			message := []byte\{encryptVersion}
 			message = append(message, salt...)
 			message = append(message, nonce...)
-			message = sealer.Seal(message, nonce, []byte(plaintext), nil)
+			message = sealer.Seal(message, nonce, plaintext.bytes(), nil)
 			return base64.StdEncoding.EncodeToString(message)
 		}
 		`,
 		// CryptoDecrypt opens what CryptoEncrypt sealed, or says why it could not. A
 		// wrong password and an edited message fail the same way — the tag does not
-		// check out either way, and it cannot tell which. Backs hive.crypto.decrypt.
+		// check out either way, and it cannot tell which. The plaintext is opened
+		// straight into locked memory. Backs hive.crypto.decrypt.
 		`
-		func CryptoDecrypt(ciphertext string, password string) Result[string, CryptoCryptoError] \{
+		func CryptoDecrypt(ciphertext string, password Secret) Result[Secret, CryptoCryptoError] \{
+			defer runtime.KeepAlive(password)
+			fail := func(reason, msg string) Result[Secret, CryptoCryptoError] \{
+				return Err[Secret, CryptoCryptoError](CryptoCryptoError\{Reason: reason, Message: msg})
+			}
 			message, err := base64.StdEncoding.DecodeString(ciphertext)
 			if err != nil \{
-				return Err[string, CryptoCryptoError](CryptoCryptoError\{Reason: "Malformed", Message: "input is not valid base64"})
+				return fail("Malformed", "input is not valid base64")
 			}
 			if len(message) < 1+encryptSaltLen \{
-				return Err[string, CryptoCryptoError](CryptoCryptoError\{Reason: "Malformed", Message: "input is too short to be an encrypted message"})
+				return fail("Malformed", "input is too short to be an encrypted message")
 			}
 			work, known := encryptWork(message[0])
 			if !known \{
-				return Err[string, CryptoCryptoError](CryptoCryptoError\{Reason: "Malformed", Message: "unknown encrypted message version " + strconv.Itoa(int(message[0]))})
+				return fail("Malformed", "unknown encrypted message version "+strconv.Itoa(int(message[0])))
 			}
-			opener, ok := encryptCipher(password, message[1:1+encryptSaltLen], work)
+			opener, ok := encryptCipher(password.bytes(), message[1:1+encryptSaltLen], work)
 			if !ok \{
-				return Err[string, CryptoCryptoError](CryptoCryptoError\{Reason: "Malformed", Message: "could not derive a key from the password"})
+				return fail("Malformed", "could not derive a key from the password")
 			}
 			rest := message[1+encryptSaltLen:]
-			if len(rest) < opener.NonceSize() \{
-				return Err[string, CryptoCryptoError](CryptoCryptoError\{Reason: "Malformed", Message: "input is too short to be an encrypted message"})
+			if len(rest) < opener.NonceSize()+opener.Overhead() \{
+				return fail("Malformed", "input is too short to be an encrypted message")
 			}
-			plaintext, err := opener.Open(nil, rest[:opener.NonceSize()], rest[opener.NonceSize():], nil)
-			if err != nil \{
-				return Err[string, CryptoCryptoError](CryptoCryptoError\{Reason: "BadSignature", Message: "wrong password, or the message was changed after it was encrypted"})
+			sealed := rest[opener.NonceSize():]
+			plaintext, locked := newSecret(len(sealed) - opener.Overhead())
+			if locked != nil \{
+				return fail(locked.Reason, locked.Message)
 			}
-			return Ok[string, CryptoCryptoError](string(plaintext))
+			if _, err := opener.Open(plaintext.bytes()[:0], rest[:opener.NonceSize()], sealed, nil); err != nil \{
+				return fail("BadSignature", "wrong password, or the message was changed after it was encrypted")
+			}
+			return Ok[Secret, CryptoCryptoError](plaintext)
 		}
 		`,
 		// CryptoJwtCodec says read and write it as a JWT under this secret, which the
 		// value carries wherever it is kept.
 		`
-		func CryptoJwtCodec(secret string) CodecCodec[CryptoJwtError] \{ return CodecCodec[CryptoJwtError]\{Secret: secret} }
+		func CryptoJwtCodec(secret Secret) CodecCodec[CryptoJwtError] \{ return CodecCodec[CryptoJwtError]\{Secret: secret} }
 
 		type CryptoJwtError struct \{
 			Path     string
@@ -3582,11 +3899,12 @@ func cryptoSource(): Str {
 		// CryptoJwtSign builds an HS256 token from an already-JSON-encoded payload and a
 		// shared secret. HMAC signing cannot fail, so it returns a plain string.
 		`
-		func CryptoJwtSign(payloadJSON string, secret string) string \{
+		func CryptoJwtSign(payloadJSON string, secret Secret) string \{
+			defer runtime.KeepAlive(secret)
 			header := base64.RawURLEncoding.EncodeToString([]byte(~BT~\{"alg":"HS256","typ":"JWT"}~BT~))
 			payload := base64.RawURLEncoding.EncodeToString([]byte(payloadJSON))
 			input := header + "." + payload
-			sig := base64.RawURLEncoding.EncodeToString(hmacSha256Raw(secret, input))
+			sig := base64.RawURLEncoding.EncodeToString(hmacSha256Raw(secret.bytes(), input))
 			return input + "." + sig
 		}
 		`,
@@ -3619,7 +3937,7 @@ func cryptoSource(): Str {
 		// the claims with the decoder the caller's type derives. A token that does not
 		// check out fails the way claims of the wrong shape do.
 		`
-		func CryptoJwtParse[T any](token string, secret string, dec func(JsonValue, string) (T, *JsonJsonError)) Result[T, CryptoJwtError] \{
+		func CryptoJwtParse[T any](token string, secret Secret, dec func(JsonValue, string) (T, *JsonJsonError)) Result[T, CryptoJwtError] \{
 			claims := jwtVerify(token, secret)
 			if claims.IsError() \{
 				why := claims.Err()
@@ -3643,7 +3961,8 @@ func cryptoSource(): Str {
 		// Pin the algorithm: only HS256 is accepted, so "none" and any other alg
 		// are rejected outright (no algorithm-confusion surface).
 		`
-		func jwtVerify(token string, secret string) Result[string, CryptoCryptoError] \{
+		func jwtVerify(token string, secret Secret) Result[string, CryptoCryptoError] \{
+			defer runtime.KeepAlive(secret)
 			fail := func(reason, msg string) Result[string, CryptoCryptoError] \{
 				return Err[string, CryptoCryptoError](CryptoCryptoError\{Reason: reason, Message: msg})
 			}
@@ -3671,7 +3990,7 @@ func cryptoSource(): Str {
 		`,
 		// Constant-time comparison.
 		`
-			if !hmac.Equal(sig, hmacSha256Raw(secret, parts[0]+"."+parts[1])) \{
+			if !hmac.Equal(sig, hmacSha256Raw(secret.bytes(), parts[0]+"."+parts[1])) \{
 				return fail("BadSignature", "signature does not match")
 			}
 			payload, err := base64.RawURLEncoding.DecodeString(parts[1])
@@ -6355,6 +6674,7 @@ func syslinkNetSource(): Str {
 			"net"
 			"os"
 			"path/filepath"
+			"runtime"
 			"sort"
 			"strconv"
 			"strings"
@@ -7120,22 +7440,22 @@ func syslinkNetSource(): Str {
 		`
 		var (
 			secretOnce sync.Once
-			secretVal  []byte
+			secretVal  Secret
 			secretErr  error
 			chosenMu   sync.RWMutex
-			chosenKey  []byte
+			chosenKey  Secret
 		)
 
-		func clusterSecret() ([]byte, error) \{
+		func clusterSecret() (Secret, error) \{
 			chosenMu.RLock()
 			chosen := chosenKey
 			chosenMu.RUnlock()
-			if chosen != nil \{
+			if chosen.p != nil \{
 				return chosen, nil
 			}
 			secretOnce.Do(func() \{
 				if env := os.Getenv("HIVE_SYSLINK_KEY"); env != "" \{
-					secretVal = []byte(env)
+					secretVal, secretErr = keptKey([]byte(env))
 					return
 				}
 				home, err := os.UserHomeDir()
@@ -7146,7 +7466,7 @@ func syslinkNetSource(): Str {
 				dir := filepath.Join(home, ".hive")
 				path := filepath.Join(dir, "syslink.key")
 				if b, err := os.ReadFile(path); err == nil && len(b) > 0 \{
-					secretVal = b
+					secretVal, secretErr = keptKey(b)
 					return
 				}
 				if err := os.MkdirAll(dir, 0o700); err != nil \{
@@ -7162,21 +7482,29 @@ func syslinkNetSource(): Str {
 					secretErr = errors.New("could not write " + path + ": " + err.Error())
 					return
 				}
-				secretVal = fresh
+				secretVal, secretErr = keptKey(fresh)
 			})
 			return secretVal, secretErr
+		}
+
+		func keptKey(b []byte) (Secret, error) \{
+			s, err := hideBytes(b)
+			if err != nil \{
+				return s, errors.New("the cluster key: " + err.Message)
+			}
+			return s, nil
 		}
 		`,
 		// SyslinkSetKey is this program's key from here on, held in memory and nowhere
 		// else. A connection made or accepted after it proves itself with it; one already
 		// open stays as it is.
 		`
-		func SyslinkSetKey(key string) \{
-			if key == "" \{
+		func SyslinkSetKey(key Secret) \{
+			if len(key.bytes()) == 0 \{
 				panic("hive: syslink.setKey: an empty key proves nothing about who holds it")
 			}
 			chosenMu.Lock()
-			chosenKey = []byte(key)
+			chosenKey = key
 			chosenMu.Unlock()
 		}
 		`,
@@ -7250,8 +7578,9 @@ func syslinkNetSource(): Str {
 		// attacker terminating TLS on both sides holds a proof over (peer, itself) and
 		// needs one over (itself, other peer), which it cannot produce.
 		`
-		func bindingProof(secret []byte, role string, mine, theirs []byte) []byte \{
-			mac := hmac.New(sha256.New, secret)
+		func bindingProof(secret Secret, role string, mine, theirs []byte) []byte \{
+			defer runtime.KeepAlive(secret)
+			mac := hmac.New(sha256.New, secret.bytes())
 			mac.Write([]byte("hive-syslink-v1|"))
 			mac.Write([]byte(role))
 			mac.Write([]byte("|"))
@@ -14499,6 +14828,7 @@ func termSecretSource(): Str {
 			"fmt"
 			"os"
 			"os/signal"
+			"runtime"
 			"sync"
 			"syscall"
 		)
@@ -14514,18 +14844,44 @@ func termSecretSource(): Str {
 			interrupts  chan os.Signal
 		)
 		`,
-		// TermReadSecret reads a line exactly as TermRead does, with the terminal's echo
-		// turned off while it waits. Returns the line without the trailing newline and
-		// parks only the calling virtual thread. Backs hive.term.readSecret.
+		// TermReadSecret reads a line as TermRead does, with the terminal's echo turned
+		// off while it waits, a byte at a time into locked memory so the line is never a
+		// Go string. Returns it without the trailing newline and parks only the calling
+		// virtual thread. Backs hive.term.readSecret.
 		//
 		// The echo belongs to the terminal rather than to standard input: under hive run
 		// the line is typed at the compiler's terminal and reaches this program through
 		// a relay file (see TermRead). Where there is no terminal, the line is read all
 		// the same and only the hiding of it is lost.
 		`
-		func TermReadSecret() string \{
+		func TermReadSecret() Result[Secret, SecretError] \{
 			hidden := hideEcho()
-			line := TermRead()
+			typed, failed := newSecret(64)
+			n := 0
+			for \{
+				c, err := termInput.ReadByte()
+				if err != nil || c == '\n' \{
+					break
+				}
+		`,
+		// A line too long to lock is still read to its end, so what follows it is not
+		// taken for the next line.
+		`
+				if failed != nil \{
+					continue
+				}
+				if n == len(typed.bytes()) \{
+					bigger, err := newSecret(2 * n)
+					if err != nil \{
+						failed = err
+						continue
+					}
+					copy(bigger.bytes(), typed.bytes())
+					typed = bigger
+				}
+				typed.bytes()[n] = c
+				n++
+			}
 			showEcho()
 		`,
 		// The Return that ended the line was not echoed either, so the cursor is
@@ -14535,7 +14891,19 @@ func termSecretSource(): Str {
 			if hidden \{
 				fmt.Println()
 			}
-			return line
+			if failed != nil \{
+				return Err[Secret, SecretError](*failed)
+			}
+			for n > 0 && typed.bytes()[n-1] == '\r' \{
+				n--
+			}
+			line, err := newSecret(n)
+			if err != nil \{
+				return Err[Secret, SecretError](*err)
+			}
+			copy(line.bytes(), typed.bytes()[:n])
+			runtime.KeepAlive(typed)
+			return Ok[Secret, SecretError](line)
 		}
 		`,
 		// hideEcho turns the echo off for this read and reports whether it is off —
@@ -14745,7 +15113,10 @@ func fileWriteSecretSource(): Str {
 		`
 		package hive
 
-		import "os"
+		import (
+			"os"
+			"runtime"
+		)
 		`,
 		// FileWriteSecret replaces a file with contents, creating it when absent, and
 		// leaves it readable by this user alone. Backs hive.file.writeSecret.
@@ -14754,12 +15125,13 @@ func fileWriteSecretSource(): Str {
 		// was already there is narrowed rather than trusted: the permissions it happened
 		// to carry are no claim about who should see what is going into it now.
 		`
-		func FileWriteSecret(path, contents string) Result[int, FileFileError] \{
+		func FileWriteSecret(path string, contents Secret) Result[int, FileFileError] \{
+			defer runtime.KeepAlive(contents)
 			f, err := openPrivate(path)
 			if err != nil \{
 				return Err[int, FileFileError](fileError(path, err))
 			}
-			written, err := replaceContents(f, contents)
+			written, err := replaceContents(f, contents.bytes())
 			if closed := f.Close(); err == nil \{
 				err = closed
 			}
@@ -14772,11 +15144,11 @@ func fileWriteSecretSource(): Str {
 		// Emptying first is what makes this a replacement: without it a shorter secret
 		// would leave the tail of the longer one it replaced.
 		`
-		func replaceContents(f *os.File, contents string) (int, error) \{
+		func replaceContents(f *os.File, contents []byte) (int, error) \{
 			if err := f.Truncate(0); err != nil \{
 				return 0, err
 			}
-			return f.WriteString(contents)
+			return f.Write(contents)
 		}
 		`
 	], "\n\n")
