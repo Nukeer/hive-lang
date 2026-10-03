@@ -43,7 +43,8 @@ func everything(): ui.View {
 		ui.overlay([ui.onDismiss(Msg.Hit())], ui.text([], "dialog")),
 		ui.table([ui.onPick(Msg.Picked(_)), ui.onSort(Msg.Picked(_))],
 			toTable(["head & one", "head two", "a < b", "c > d"], 2)),
-		ui.canvas([ui.region(0.0, 0.0, 10.0, 10.0), ui.width(200), ui.height(100)], [
+		ui.canvas([ui.region(0.0, 0.0, 10.0, 10.0), ui.width(200), ui.height(100),
+			ui.touch("stick & <thumb>")], [
 			ui.path([ui.thick(2.0), ui.paint(ui.Tone.Good())], [0.0, 0.0, 5.0, 9.0]),
 			ui.dot([ui.paint(ui.Tone.Danger())], 5.0, 5.0, 1.0),
 			ui.words([ui.paint(ui.Tone.HEX("#123456"))], 5.0, 8.0, 2.0, "on canvas & more")

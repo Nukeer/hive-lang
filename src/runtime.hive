@@ -7822,6 +7822,7 @@ func uiSource(): Str {
 		func UiAttrHeading(n int) UiAttr        \{ return uiNum("heading", n) }
 		func UiAttrPlaceholder(s string) UiAttr \{ return uiStr("placeholder", s) }
 		func UiAttrHint(s string) UiAttr        \{ return uiStr("hint", s) }
+		func UiAttrTouch(s string) UiAttr       \{ return uiStr("touch", s) }
 
 		func UiAttrDisabled(b bool) UiAttr \{ return UiAttr\{Kind: "disabled", Flag: b} }
 		func UiAttrBusy(b bool) UiAttr     \{ return UiAttr\{Kind: "busy", Flag: b} }
@@ -8183,6 +8184,11 @@ func uiSource(): Str {
 			if hint, ok := uiFind(attrs, "hint"); ok \{
 				b = append(b, " title=\""...)
 				b = uiEscapeInto(b, hint.Word)
+				b = append(b, '"')
+			}
+			if touch, ok := uiFind(attrs, "touch"); ok \{
+				b = append(b, " data-touch=\""...)
+				b = uiEscapeInto(b, touch.Word)
 				b = append(b, '"')
 			}
 			if r.handlers != nil && uiHasEvent(attrs) \{
@@ -9198,6 +9204,7 @@ func uiSource(): Str {
 		.h-pinned\{background:none;pointer-events:none}
 		.h-pinned>.h-overlay\{background:none;box-shadow:none;pointer-events:auto;
 		display:flex;max-height:none;border-radius:0}
+		[data-touch]\{touch-action:none;user-select:none;-webkit-user-select:none}
 		.h-overlay\{background:var(--bg);border-radius:16px;max-height:85vh;overflow:auto;
 		max-width:calc(100vw - 24px);box-shadow:0 12px 40px rgba(0,0,0,.3)}
 		.h-spinner\{width:18px;height:18px;border:2px solid var(--line);
@@ -13522,7 +13529,7 @@ func uiSceneJs(): Str {
 		    lookX = 0;
 		    lookY = 0;
 		  }
-		  if (want.indexOf("p") >= 0) \{ pads(); }
+		  if (want.indexOf("p") >= 0) \{ pads(); touches(); }
 		  reported(now);
 		  if (pendingScenes.length) \{ flushScene(); }
 		  if (dirty) \{
@@ -14202,6 +14209,10 @@ func uiSceneJs(): Str {
 		// themselves still running.
 		`
 		  window.addEventListener("blur", release);
+		  document.addEventListener("pointerdown", pressed, true);
+		  document.addEventListener("pointermove", dragged, true);
+		  document.addEventListener("pointerup", lifted, true);
+		  document.addEventListener("pointercancel", lifted, true);
 		}
 		`,
 		// Whether a click landed on something the program is listening to. Those keep
@@ -14265,6 +14276,52 @@ func uiSceneJs(): Str {
 		    if (want.indexOf("u") >= 0) \{ post("keyup", k, 0); }
 		  }
 		  held = \{};
+		  fingers = \{};
+		}
+
+		var fingers = \{}, touchNames = \{}, touchTold = \{};
+
+		function pressed(e) \{
+		  var el = e.target && e.target.closest ? e.target.closest("[data-touch]") : null;
+		  if (!el) \{ return; }
+		  e.preventDefault();
+		  var name = el.getAttribute("data-touch");
+		  touchNames[name] = true;
+		  fingers[e.pointerId] = \{ name: name, box: el.getBoundingClientRect(), x: 0, y: 0 };
+		  dragged(e);
+		}
+
+		function dragged(e) \{
+		  var f = fingers[e.pointerId];
+		  if (!f) \{ return; }
+		  var x = (e.clientX - f.box.left - f.box.width / 2) / Math.max(1, f.box.width / 2);
+		  var y = (e.clientY - f.box.top - f.box.height / 2) / Math.max(1, f.box.height / 2);
+		  var far = Math.sqrt(x * x + y * y);
+		  if (far > 1) \{ x /= far; y /= far; }
+		  f.x = x;
+		  f.y = y;
+		}
+
+		function lifted(e) \{
+		  delete fingers[e.pointerId];
+		}
+
+		// A finger on a ui.touch(name) is pad -1: name is 1 while held, nameX and nameY where on it.
+		function touches() \{
+		  var now = \{};
+		  for (var name in touchNames) \{ now[name] = 0; now[name + "X"] = 0; now[name + "Y"] = 0; }
+		  for (var id in fingers) \{
+		    var f = fingers[id];
+		    if (now[f.name] === 1) \{ continue; }
+		    now[f.name] = 1;
+		    now[f.name + "X"] = f.x;
+		    now[f.name + "Y"] = f.y;
+		  }
+		  for (var control in now) \{
+		    var told = touchTold[control] || 0;
+		    if (now[control] === told || (now[control] !== 0 && Math.abs(now[control] - told) < 0.02)) \{ continue; }
+		    if (post("pad", control + "|" + round(now[control]), -1)) \{ touchTold[control] = now[control]; }
+		  }
 		}
 		`,
 		// A gamepad is the one input a browser will not tell you about. There is no

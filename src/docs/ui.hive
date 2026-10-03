@@ -295,6 +295,7 @@ func attributes(): Str {
 		| ~BT~tone(Tone)~BT~ ~BT~background(Tone)~BT~ ~BT~paint(Tone)~BT~ | [~BT~Tone~BT~](ui-colour.md) |
 		| ~BT~kind(InputKind)~BT~ | ~BT~InputKind~BT~ |
 		| ~BT~placeholder(text)~BT~ ~BT~hint(text)~BT~ | ~BT~Str~BT~ |
+		| ~BT~touch(name)~BT~ | ~BT~Str~BT~ — a thumb control, heard as pad -1 by a scene's ~BT~onPad~BT~ |
 		| ~BT~disabled(b)~BT~ ~BT~busy(b)~BT~ | ~BT~Bool~BT~ |
 		| ~BT~region(x, y, width, height)~BT~ ~BT~thick(w)~BT~ | ~BT~Float~BT~ — a [canvas](ui-canvas.md) |
 		| ~BT~at(x, y, z)~BT~ ~BT~turn(x, y, z)~BT~ | ~BT~Float~BT~ — a [shape](ui-scene-shapes.md) |

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.2.12
+
+### Standard library
+
+* **`hive.ui.touch(name)` makes any widget a thumb control.** While a finger is on it, a scene's `onPad` hears pad -1: `name` is 1 while the finger is down and 0 once it lifts, and `nameX` and `nameY` are where on the widget it is, -1 to 1 from the middle and held inside a circle. Every finger is followed on its own, so a stick and a button can be held together, and the widget's box is taken when the finger goes down, so a repaint under it moves nothing. The page neither scrolls nor zooms under one.
+
 ## v0.2.11
 
 ### Language

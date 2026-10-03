@@ -735,6 +735,7 @@ func isUiAttr(name: Str): Bool {
 		|| name == "grab" || name == "crosshair" || name == "shadows"
 		|| name == "at" || name == "turn" || name == "eye" || name == "aim"
 		|| name == "voice" || name == "pitch" || name == "volume"
+		|| name == "touch"
 		|| isUiEvent(name)
 }
 
@@ -904,7 +905,7 @@ func uiAttrParams(name: Str): types.Ty[dyn] {
 		|| name == "grain" || name == "bits" {
 		return [types.Ty.TInt()]
 	}
-	if name == "placeholder" || name == "hint" { return [types.Ty.TStr()] }
+	if name == "placeholder" || name == "hint" || name == "touch" { return [types.Ty.TStr()] }
 	if name == "disabled" || name == "busy" || name == "grab" || name == "crosshair"
 		|| name == "shadows" {
 		return [types.Ty.TBool()]
