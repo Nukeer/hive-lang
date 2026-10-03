@@ -121,6 +121,16 @@ test "two importers of one file run its tests once between them" {
 	assert described(project.plan([x, y, w])) == "w.hive: w works; y.hive: x works, y works"
 }
 
+test "the e2e tree runs a sibling's tests and an outside module's in one program" {
+	mut project.Reached[dyn] reached = []
+	for each file in project.hiveFilesUnder("../e2e/tree") {
+		if project.reached(file) is Result.Ok(r) {
+			append(reached, r)
+		}
+	}
+	assert described(project.plan(reached)) == "../e2e/tree/shapes.test.hive: an area is its sides multiplied, twice adds a number to itself, a square's area is its side squared, a doubled area is twice the area"
+}
+
 test "a file git ignores is not one of the files under a directory" {
 	put("_tree/.gitignore", "ignored/\n")
 	put("_tree/a.hive", "")
